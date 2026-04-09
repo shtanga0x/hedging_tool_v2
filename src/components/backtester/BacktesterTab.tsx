@@ -456,7 +456,6 @@ export function BacktesterTab() {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const chainTickers = (parsed.bybitChain?.tickers ?? []) as any[];
             const ticker = chainTickers.find((t: { symbol: string }) => t.symbol === symbol);
-            const markIv = ticker ? parseFloat(String(ticker.markIv)) || 0 : 0;
             const askPrice = ticker ? parseFloat(String(ticker.ask1Price)) || 0 : 0;
             const bidPrice = ticker ? parseFloat(String(ticker.bid1Price)) || 0 : 0;
             const entryPrice = sel.side === 'buy' ? askPrice : bidPrice;
