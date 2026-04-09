@@ -1,0 +1,333 @@
+import { useMemo } from 'react';
+import type { OptionType, ProjectionPoint, PolymarketPosition, BybitPosition } from '../types';
+import {
+  computeCombinedPnlCurve,
+  buildPriceGrid,
+  bsPrice,
+  priceOptionYes,
+  interpolateSmile,
+  autoH,
+  type SmilePoint,
+} from '../pricing/engine';
+
+export interface FuturesPositionForCurve {
+  entryPrice: number;
+  size: number; // positive = long, negative = short
+}
+
+interface PortfolioCurvesInput {
+  polyPositions: PolymarketPosition[];
+  bybitPositions: BybitPosition[];
+  futuresPositions?: FuturesPositionForCurve[];
+  lowerPrice: number;
+  upperPrice: number;
+  polyTauNow: number;        // Polymarket time to expiry in years
+  polyExpiryTs: number;      // Polymarket expiry Unix seconds
+  optionType: OptionType;
+  smile?: SmilePoint[];
+  bybitSmile?: SmilePoint[]; // IV smile from Bybit option chain (sticky-moneyness)
+  numPoints?: number; // default 500
+}
+
+interface PortfolioCurvesOutput {
+  combinedCurves: ProjectionPoint[][];   // Time snapshot curves
+  combinedLabels: string[];
+  polyNowCurve: ProjectionPoint[];
+  polyExpiryCurve: ProjectionPoint[];
+  bybitNowCurve: ProjectionPoint[];
+  bybitExpiryCurve: ProjectionPoint[];
+  polyAtBybitExpiryCurve: ProjectionPoint[];
+  futuresNowCurve: ProjectionPoint[];
+  polyEntryCost: number;
+  bybitEntryCost: number;
+  totalEntryCost: number;  // gross: all premiums + fees (unsigned)
+  totalFees: number;
+}
+
+const YEAR_SEC = 365.25 * 24 * 3600;
+
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return '0h';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h`;
+  return `${hours}h`;
+}
+
+interface Snapshot {
+  label: string;
+  timestamp: number; // absolute unix seconds
+}
+
+/** Compute meaningful time snapshots based on actual expiry dates */
+function computeSnapshots(
+  polyPositions: PolymarketPosition[],
+  bybitPositions: BybitPosition[],
+  nowSec: number,
+  polyExpiryTs: number,
+  hasFutures: boolean,
+): Snapshot[] {
+  const hasPoly = polyPositions.length > 0 && polyExpiryTs > nowSec;
+  const hasBybit = bybitPositions.length > 0;
+
+  if (!hasPoly && !hasBybit && hasFutures) {
+    // Futures-only: P&L is time-independent, show a single snapshot
+    return [{ label: 'Now', timestamp: nowSec }];
+  }
+
+  const bybitExpirySec = hasBybit
+    ? Math.min(...bybitPositions.map(p => p.expiryTimestamp)) / 1000
+    : 0;
+  const bybitHasExpiry = hasBybit && bybitExpirySec > nowSec;
+
+  if (hasPoly && bybitHasExpiry) {
+    // Both sources: snapshots at actual expiry dates
+    const earlierSec = Math.min(bybitExpirySec, polyExpiryTs);
+    const laterSec = Math.max(bybitExpirySec, polyExpiryTs);
+    const bybitFirst = bybitExpirySec <= polyExpiryTs;
+
+    const earlierLabel = bybitFirst ? 'Options' : 'Event';
+    const laterLabel = bybitFirst ? 'Event' : 'Options';
+
+    return [
+      { label: `Now (${formatDuration(earlierSec - nowSec)} to ${earlierLabel.toLowerCase()} exp)`, timestamp: nowSec },
+      { label: `½ to ${earlierLabel} Exp (${formatDuration((earlierSec - nowSec) / 2)})`, timestamp: nowSec + (earlierSec - nowSec) / 2 },
+      { label: `At ${earlierLabel} Expiry`, timestamp: earlierSec },
+      { label: `At ${laterLabel} Expiry`, timestamp: laterSec },
+    ];
+  }
+
+  // Single source: use its expiry with 1/3, 2/3 fractions
+  const expirySec = hasPoly ? polyExpiryTs : (bybitHasExpiry ? bybitExpirySec : nowSec + 86400);
+  const ttx = expirySec - nowSec;
+
+  return [
+    { label: `Now (${formatDuration(ttx)} to exp)`, timestamp: nowSec },
+    { label: `1/3 to expiry (${formatDuration(ttx * 2 / 3)})`, timestamp: nowSec + ttx / 3 },
+    { label: `2/3 to expiry (${formatDuration(ttx / 3)})`, timestamp: nowSec + ttx * 2 / 3 },
+    { label: 'At expiry', timestamp: expirySec },
+  ];
+}
+
+/** Compute P&L curve for only Polymarket positions at a given snapshot timestamp.
+ *  Each position uses its own optionType and computes its own tau from endDate. */
+function computePolyOnlyCurve(
+  positions: PolymarketPosition[],
+  grid: number[],
+  tau: number,
+  _optionType: OptionType,
+  H: number,
+  smile: SmilePoint[] | undefined,
+  snapTs?: number,
+): ProjectionPoint[] {
+  if (positions.length === 0 || grid.length === 0) return [];
+  const points: ProjectionPoint[] = [];
+
+  for (const cryptoPrice of grid) {
+    let pnl = 0;
+    for (const pos of positions) {
+      const ot = pos.optionType;
+      const iv = smile
+        ? interpolateSmile(smile, Math.log(cryptoPrice / pos.strikePrice))
+        : pos.impliedVol;
+      const posTau = (snapTs != null && pos.endDate != null && pos.endDate > 0)
+        ? Math.max((pos.endDate - snapTs) / (365.25 * 24 * 3600), 0)
+        : tau;
+      const yesPrice = posTau <= 0
+        ? (ot === 'above'
+          ? (cryptoPrice >= pos.strikePrice ? 1 : 0)
+          : (pos.isUpBarrier
+            ? (cryptoPrice >= pos.strikePrice ? 1 : 0)
+            : (cryptoPrice <= pos.strikePrice ? 1 : 0)))
+        : priceOptionYes(cryptoPrice, pos.strikePrice, iv, posTau, ot, pos.isUpBarrier, H);
+      const projectedValue = pos.side === 'YES' ? yesPrice : (1 - yesPrice);
+      pnl += (projectedValue - pos.entryPrice) * pos.quantity - pos.entryFee;
+    }
+    points.push({ cryptoPrice, pnl });
+  }
+  return points;
+}
+
+/** Compute P&L curve for only Bybit positions at given taus (includes fees).
+ *  When bybitSmile is provided, the IV is interpolated per-spot to avoid the
+ *  flat-vol kink artifact that appears at the strike with a constant markIv. */
+function computeBybitOnlyCurve(
+  positions: BybitPosition[],
+  grid: number[],
+  taus: Map<string, number>,
+  bybitSmile?: SmilePoint[],
+): ProjectionPoint[] {
+  if (positions.length === 0 || grid.length === 0) return [];
+  const points: ProjectionPoint[] = [];
+
+  for (const cryptoPrice of grid) {
+    let pnl = 0;
+    for (const pos of positions) {
+      const tau = taus.get(pos.symbol) ?? 0;
+      const rawIv = bybitSmile && bybitSmile.length > 0
+        ? interpolateSmile(bybitSmile, Math.log(cryptoPrice / pos.strike))
+        : pos.markIv;
+      const iv = Math.max(rawIv, 0.001); // clamp: never hit the kinked sigma≤0 branch
+      const currentValue = bsPrice(cryptoPrice, pos.strike, iv, tau, pos.optionsType);
+      const sideMultiplier = pos.side === 'buy' ? 1 : -1;
+      pnl += (currentValue - pos.entryPrice) * sideMultiplier * pos.quantity - pos.entryFee;
+    }
+    points.push({ cryptoPrice, pnl });
+  }
+  return points;
+}
+
+export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurvesOutput {
+  const {
+    polyPositions,
+    bybitPositions,
+    futuresPositions = [],
+    lowerPrice,
+    upperPrice,
+    polyTauNow,
+    polyExpiryTs,
+    optionType,
+    smile,
+    bybitSmile,
+    numPoints = 2000,
+  } = input;
+
+  return useMemo(() => {
+    const empty: PortfolioCurvesOutput = {
+      combinedCurves: [],
+      combinedLabels: [],
+      polyNowCurve: [],
+      polyExpiryCurve: [],
+      bybitNowCurve: [],
+      bybitExpiryCurve: [],
+      polyAtBybitExpiryCurve: [],
+      futuresNowCurve: [],
+      polyEntryCost: 0,
+      bybitEntryCost: 0,
+      totalEntryCost: 0,
+      totalFees: 0,
+    };
+
+    if (lowerPrice <= 0 || upperPrice <= lowerPrice) return empty;
+    if (polyPositions.length === 0 && bybitPositions.length === 0 && futuresPositions.length === 0) return empty;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // Compute time snapshots based on actual expiry dates
+    const snapshots = computeSnapshots(polyPositions, bybitPositions, nowSec, polyExpiryTs, futuresPositions.length > 0);
+
+    // Build shared uniform grid (500 points for smooth linear interpolation)
+    const grid = buildPriceGrid(lowerPrice, upperPrice, numPoints);
+
+    // H locked at current-tau value so that the smile (calibrated at H_now) is applied
+    // consistently across all snapshots — changing H per-snapshot causes the same IV to
+    // price radically differently, front-loading nearly all theta into the first interval.
+    const hNow = autoH(polyTauNow);
+
+    // Compute combined curve at each snapshot — all share the same H as the calibrated smile
+    const combinedCurves: ProjectionPoint[][] = snapshots.map(snap => {
+      const polyTau = polyExpiryTs > 0
+        ? Math.max((polyExpiryTs - snap.timestamp) / YEAR_SEC, 0)
+        : 0;
+      const hForSnap = hNow;
+      const bybitTaus = new Map<string, number>();
+      for (const pos of bybitPositions) {
+        bybitTaus.set(pos.symbol, Math.max(((pos.expiryTimestamp / 1000) - snap.timestamp) / YEAR_SEC, 0));
+      }
+      const baseCurve = computeCombinedPnlCurve(
+        polyPositions, bybitPositions,
+        lowerPrice, upperPrice,
+        polyTau, bybitTaus,
+        optionType, hForSnap, smile, bybitSmile, numPoints, grid,
+        snap.timestamp,
+      );
+      if (futuresPositions.length === 0) return baseCurve;
+      return baseCurve.map(pt => ({
+        ...pt,
+        pnl: pt.pnl + futuresPositions.reduce((sum, fp) => sum + (pt.cryptoPrice - fp.entryPrice) * fp.size, 0),
+      }));
+    });
+
+    const combinedLabels = snapshots.map(s => s.label);
+
+    // Individual source overlay curves (for when both sources present)
+    // Use shared grid so all curves align by index
+    const polyNowCurve = computePolyOnlyCurve(
+      polyPositions, grid,
+      polyTauNow, optionType, autoH(polyTauNow), smile,
+      nowSec,
+    );
+    // For expiry curve, use a far-future timestamp so all per-position taus resolve to 0
+    const farFutureTs = nowSec + 365 * 24 * 3600 * 10;
+    const polyExpiryCurve = computePolyOnlyCurve(
+      polyPositions, grid,
+      0, optionType, autoH(0), smile,
+      farFutureTs,
+    );
+
+    // Bybit: now and at bybit's own expiry (tau=0)
+    const bybitTausNow = new Map<string, number>();
+    const bybitTausExpiry = new Map<string, number>();
+    for (const pos of bybitPositions) {
+      bybitTausNow.set(pos.symbol, Math.max(((pos.expiryTimestamp / 1000) - nowSec) / YEAR_SEC, 0));
+      bybitTausExpiry.set(pos.symbol, 0);
+    }
+    const bybitNowCurve = computeBybitOnlyCurve(bybitPositions, grid, bybitTausNow, bybitSmile);
+    const bybitExpiryCurve = computeBybitOnlyCurve(bybitPositions, grid, bybitTausExpiry, bybitSmile);
+
+    // Poly at Bybit option expiry (only when Bybit expires before Poly)
+    const bybitEarliestExpirySec = bybitPositions.length > 0
+      ? Math.min(...bybitPositions.map(p => p.expiryTimestamp)) / 1000
+      : 0;
+    const polyTauAtBybitExpiry = (bybitEarliestExpirySec > 0 && polyExpiryTs > bybitEarliestExpirySec)
+      ? Math.max((polyExpiryTs - bybitEarliestExpirySec) / YEAR_SEC, 0)
+      : -1; // sentinel: -1 means "don't show"
+    const polyAtBybitExpiryCurve = polyTauAtBybitExpiry >= 0
+      ? computePolyOnlyCurve(polyPositions, grid, polyTauAtBybitExpiry, optionType, hNow, smile, bybitEarliestExpirySec)
+      : [];
+
+    // Total entry cost (gross, unsigned) and fees
+    // totalEntryCost = sum of all premiums + fees, regardless of buy/sell
+    // This is the correct denominator for P&L % (at NOW: P&L ≈ -fees, at expiry loss: P&L = -(premium+fee) = -100%)
+    let totalEntryCost = 0;
+    let totalFees = 0;
+    let polyEntryCost = 0;
+    let bybitEntryCost = 0;
+    for (const p of polyPositions) {
+      const premium = p.entryPrice * p.quantity;
+      totalEntryCost += premium + p.entryFee;
+      polyEntryCost += premium + p.entryFee;
+      totalFees += p.entryFee;
+    }
+    for (const b of bybitPositions) {
+      const premium = b.entryPrice * b.quantity;
+      totalEntryCost += premium + b.entryFee;
+      const mult = b.side === 'buy' ? 1 : -1;
+      bybitEntryCost += (premium + b.entryFee) * mult;
+      totalFees += b.entryFee;
+    }
+
+    // Futures now curve: linear P&L
+    const futuresNowCurve: ProjectionPoint[] = futuresPositions.length > 0
+      ? grid.map(cryptoPrice => ({
+          cryptoPrice,
+          pnl: futuresPositions.reduce((sum, fp) => sum + (cryptoPrice - fp.entryPrice) * fp.size, 0),
+        }))
+      : [];
+
+    return {
+      combinedCurves,
+      combinedLabels,
+      polyNowCurve,
+      polyExpiryCurve,
+      bybitNowCurve,
+      bybitExpiryCurve,
+      polyAtBybitExpiryCurve,
+      futuresNowCurve,
+      polyEntryCost,
+      bybitEntryCost,
+      totalEntryCost,
+      totalFees,
+    };
+  }, [polyPositions, bybitPositions, futuresPositions, lowerPrice, upperPrice, polyTauNow, polyExpiryTs, optionType, smile, bybitSmile, numPoints]);
+}
