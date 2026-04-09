@@ -8,7 +8,7 @@
  *   python btc-options-lib/api_server.py
  */
 
-const BASE = 'http://127.0.0.1:8765';
+const BASE = import.meta.env.DEV ? 'http://127.0.0.1:8765' : 'https://api.shtanga.xyz';
 
 export interface LibraryCandle {
   timestamp: number;  // Unix milliseconds
