@@ -248,6 +248,7 @@ export function BacktestChart({
   const [rightAxisZoom, setRightAxisZoom]     = useState(1.0);
   const [rightAxisOffset, setRightAxisOffset] = useState(0);
   const [smoothing, setSmoothing]         = useState(false);
+  const [endAlign, setEndAlign]           = useState(true);
 
   const portfolioColor = isDark ? '#EAEAEA' : '#1A2332';
   const showCrypto     = !!cryptoOverlay && cryptoCandles.length > 0;
@@ -370,6 +371,53 @@ export function BacktestChart({
     setRightAxisOffset(o => o + (max - min) * 0.1 / rightAxisZoom);
   }, [cryptoCandles, rightAxisZoom]);
 
+  // ─── End-align offsets ──────────────────────────────────────────────────────
+  // Shift Deribit/Bybit curves so their last data point matches the BS curve's
+  // last point, giving a better visual comparison near expiry.
+  const endAlignOffsets = useMemo((): Record<string, number> => {
+    if (!endAlign) return {};
+
+    // Derive groupId from position.id: format is "${originalId}_${source}"
+    const groupOf = (r: BacktestResult): string | null => {
+      for (const src of ['deribit', 'bybit', 'bybit-bs'] as const) {
+        if (r.source === src && r.position.id.endsWith(`_${src}`)) {
+          return r.position.id.slice(0, -(src.length + 1));
+        }
+      }
+      return null;
+    };
+
+    // Group by originalId
+    const groups: Record<string, BacktestResult[]> = {};
+    for (const r of results) {
+      const gid = groupOf(r);
+      if (!gid) continue;
+      (groups[gid] ??= []).push(r);
+    }
+
+    const offsets: Record<string, number> = {};
+    for (const group of Object.values(groups)) {
+      const bsResult = group.find(r => r.source === 'bybit-bs');
+      if (!bsResult || bsResult.pnlSeries.length === 0) continue;
+      const bsFiltered = bsResult.pnlSeries.filter(
+        pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
+      );
+      if (bsFiltered.length === 0) continue;
+      const bsLastPnl = bsFiltered[bsFiltered.length - 1].pnl;
+
+      for (const r of group) {
+        if (r.source === 'bybit-bs') continue;
+        const filtered = r.pnlSeries.filter(
+          pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
+        );
+        if (filtered.length === 0) continue;
+        const lastPnl = filtered[filtered.length - 1].pnl;
+        offsets[r.position.id] = bsLastPnl - lastPnl;
+      }
+    }
+    return offsets;
+  }, [endAlign, results, startTimestamp, endTimestamp]);
+
   // ─── Chart data ─────────────────────────────────────────────────────────────
   // Build sorted, range-filtered, optionally downsampled timestamp list
   const chartData = useMemo((): ChartDataRow[] => {
@@ -399,7 +447,7 @@ export function BacktestChart({
       const row: ChartDataRow = { timestamp: ts };
       let portfolio = 0, polyTotal = 0, optTotal = 0;
       for (const r of visibleResults) {
-        const pnl = findLastBefore(r.pnlSeries, ts) ?? 0;
+        const pnl = (findLastBefore(r.pnlSeries, ts) ?? 0) + (endAlignOffsets[r.position.id] ?? 0);
         row[r.position.id] = pnl;
         // Deribit curves are display-only; BS is the canonical option curve for Total PnL
         if (r.source !== 'deribit') portfolio += pnl;
@@ -473,6 +521,18 @@ export function BacktestChart({
           title={smoothing ? `Showing ~${MAX_SMOOTH_POINTS} pts` : 'Show all data points'}
         >
           {smoothing ? `Smooth (${MAX_SMOOTH_POINTS}pt)` : 'Smooth'}
+        </button>
+        <button
+          onClick={() => setEndAlign(v => !v)}
+          style={{
+            background: endAlign ? (isDark ? '#10B981' : '#059669') : 'transparent',
+            border: `1px solid ${endAlign ? (isDark ? '#10B981' : '#059669') : legendColor}`,
+            color: endAlign ? '#fff' : legendColor,
+            fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer', opacity: 0.9,
+          }}
+          title="Shift Deribit and Bybit curves so their final point matches BS — better visual alignment near expiry"
+        >
+          Align to expiry
         </button>
       </Box>
       <ResponsiveContainer width="100%" height={440}>
