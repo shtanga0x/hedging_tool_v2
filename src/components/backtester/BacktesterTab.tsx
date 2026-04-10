@@ -520,7 +520,11 @@ export function BacktesterTab() {
 
       for (const pos of positions) {
         if (pos.kind === 'polymarket' && pos.tokenId) {
-          const histData = await fetchPriceHistory(pos.tokenId, '1', 10);
+          // Auto-select fidelity so we get ~800 data points for the requested range.
+          // Polymarket API fidelity = minutes per data point (1 = 1-min, 60 = 1-hour).
+          const rangeMins = Math.ceil((endTs - startTs) / 60);
+          const fidelity = Math.max(1, Math.ceil(rangeMins / 800));
+          const histData = await fetchPriceHistory(pos.tokenId, String(startTs), fidelity);
           const rawHistory = (histData.history ?? []).filter(pt => pt.t >= startTs && pt.t <= endTs);
           // Skip leading zeros — Polymarket returns price 0 for timestamps before the market existed
           const firstNonZeroIdx = rawHistory.findIndex(pt => pt.p > 0);

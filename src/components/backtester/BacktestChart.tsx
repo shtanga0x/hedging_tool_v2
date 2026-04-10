@@ -43,7 +43,8 @@ const CRYPTO_FULL_NAMES: Record<string, string> = {
 const CANDLE_INTERVALS = ['1h', '4h', '1d'] as const;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const MAX_SMOOTH_POINTS = 300;
+const MAX_POINTS        = 800;   // default cap — keeps rendering fast
+const MAX_SMOOTH_POINTS = 300;   // additional reduction in smooth mode
 const MARKERS_PER_LINE  = 8;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -404,8 +405,10 @@ export function BacktestChart({
   }, [cryptoCandles, rightAxisZoom]);
 
   // ─── End-align offsets ──────────────────────────────────────────────────────
-  // Shift Deribit/Bybit curves so their last data point matches the BS curve's
-  // last point, giving a better visual comparison near expiry.
+  // For each option group (same underlying, different sources), shift all curves
+  // so their last visible data point coincides with the best-available reference.
+  // Reference priority: bybit (real market) > deribit > bybit-bs.
+  // Each option position is aligned independently — two strikes = two alignments.
   const endAlignOffsets = useMemo((): Record<string, number> => {
     if (!endAlign) return {};
 
@@ -427,24 +430,38 @@ export function BacktestChart({
       (groups[gid] ??= []).push(r);
     }
 
+    const ALIGN_PRIORITY = ['bybit', 'deribit', 'bybit-bs'] as const;
+
     const offsets: Record<string, number> = {};
     for (const group of Object.values(groups)) {
-      const bsResult = group.find(r => r.source === 'bybit-bs');
-      if (!bsResult || bsResult.pnlSeries.length === 0) continue;
-      const bsFiltered = bsResult.pnlSeries.filter(
-        pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
-      );
-      if (bsFiltered.length === 0) continue;
-      const bsLastPnl = bsFiltered[bsFiltered.length - 1].pnl;
+      // Skip single-source groups — nothing to align
+      if (group.length < 2) continue;
 
+      // Find the best-available reference result
+      let refResult: BacktestResult | null = null;
+      let refLastPnl = 0;
+      for (const src of ALIGN_PRIORITY) {
+        const candidate = group.find(r => r.source === src);
+        if (!candidate) continue;
+        const filtered = candidate.pnlSeries.filter(
+          pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
+        );
+        if (filtered.length === 0) continue;
+        refResult = candidate;
+        refLastPnl = filtered[filtered.length - 1].pnl;
+        break;
+      }
+      if (!refResult) continue;
+
+      // Shift all other sources to match the reference's last PnL
       for (const r of group) {
-        if (r.source === 'bybit-bs') continue;
+        if (r === refResult) continue;
         const filtered = r.pnlSeries.filter(
           pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
         );
         if (filtered.length === 0) continue;
         const lastPnl = filtered[filtered.length - 1].pnl;
-        offsets[r.position.id] = bsLastPnl - lastPnl;
+        offsets[r.position.id] = refLastPnl - lastPnl;
       }
     }
     return offsets;
@@ -470,9 +487,10 @@ export function BacktestChart({
 
     let sortedTs = Array.from(allTs).sort((a, b) => a - b);
 
-    // Smooth mode: downsample to MAX_SMOOTH_POINTS
-    if (smoothing) {
-      sortedTs = downsample(sortedTs, MAX_SMOOTH_POINTS);
+    // Always cap to MAX_POINTS to keep rendering fast; smooth mode reduces further.
+    const cap = smoothing ? MAX_SMOOTH_POINTS : MAX_POINTS;
+    if (sortedTs.length > cap) {
+      sortedTs = downsample(sortedTs, cap);
     }
 
     return sortedTs.map(ts => {
