@@ -281,6 +281,37 @@ export function BacktestChart({
   const hasPolymarket = visibleResults.some(r => r.position.kind === 'polymarket');
   const hasOptions    = visibleResults.some(r => r.position.kind === 'deribit' || r.position.kind === 'futures');
 
+  // ─── Normalised entry values ────────────────────────────────────────────────
+  // For option groups with 3 sources (BS/Bybit/Deribit), all three have different
+  // starting prices, making % incomparable. Normalise % to use the same reference:
+  //   priority: bybit (real market) > deribit (exchange mark) > bybit-bs (theoretical)
+  const normalizedEntryValues = useMemo((): Record<string, number> => {
+    const groupOf = (r: BacktestResult): string | null => {
+      for (const src of ['deribit', 'bybit', 'bybit-bs'] as const) {
+        if (r.source === src && r.position.id.endsWith(`_${src}`)) {
+          return r.position.id.slice(0, -(src.length + 1));
+        }
+      }
+      return null;
+    };
+    const PRIORITY: Record<string, number> = { bybit: 0, deribit: 1, 'bybit-bs': 2 };
+    const groupBest: Record<string, { priority: number; entryValue: number }> = {};
+    for (const r of results) {
+      if (!r.source || r.entryValue <= 0) continue;
+      const gid = groupOf(r);
+      if (!gid) continue;
+      const p = PRIORITY[r.source] ?? 99;
+      const ex = groupBest[gid];
+      if (!ex || p < ex.priority) groupBest[gid] = { priority: p, entryValue: r.entryValue };
+    }
+    const out: Record<string, number> = {};
+    for (const r of results) {
+      const gid = groupOf(r);
+      out[r.position.id] = (gid && groupBest[gid]) ? groupBest[gid].entryValue : r.entryValue;
+    }
+    return out;
+  }, [results]);
+
   // Map from dataKey → { entryValue, qty } for tooltip (option price + % P&L)
   // Deribit curves are excluded from portfolio/options totals (display-only; BS is canonical)
   const entryInfoMap = useMemo((): Record<string, { entryValue: number; qty: number }> => {
@@ -290,8 +321,9 @@ export function BacktestChart({
       const qty = r.position.kind === 'futures'
         ? (r.position.futuresSize ?? 1)
         : (r.position.quantity ?? 0.01);
-      m[r.position.id] = { entryValue: r.entryValue, qty };
-      if (r.source !== 'deribit') total += r.entryValue;
+      const entryValue = normalizedEntryValues[r.position.id] ?? r.entryValue;
+      m[r.position.id] = { entryValue, qty };
+      if (r.source !== 'deribit') total += r.entryValue; // use real entryValue for totals
       if (r.position.kind === 'polymarket') polyTotal += r.entryValue;
       else if (r.source !== 'deribit') optTotal += r.entryValue;
     }
@@ -299,7 +331,7 @@ export function BacktestChart({
     m['options_total']    = { entryValue: optTotal,  qty: 1 };
     m['portfolio']        = { entryValue: total,      qty: 1 };
     return m;
-  }, [visibleResults]);
+  }, [visibleResults, normalizedEntryValues]);
 
   // ─── Legend items ───────────────────────────────────────────────────────────
   const legendItems = useMemo((): LegendItem[] => {
@@ -602,7 +634,8 @@ export function BacktestChart({
               if (isOption) {
                 const qty = info?.qty ?? 0.01;
                 const entryPrice = entryVal / Math.abs(qty);
-                const currentPrice = entryPrice + value / qty;
+                const unshiftedPnl = value - (endAlignOffsets[dataKey] ?? 0);
+                const currentPrice = entryPrice + unshiftedPnl / qty;
                 const pctPart = pct ? ` / ${pct}` : '';
                 return [`$${currentPrice.toFixed(2)} (${sign}$${Math.abs(value).toFixed(2)}${pctPart})`, label];
               }
