@@ -37,6 +37,7 @@ export function BacktestFuturesCard({
 }: BacktestFuturesCardProps) {
   const crypto = (position.futuresSymbol ?? 'BTC') as CryptoOption;
   const size = position.futuresSize ?? 0.001;
+  const leverage = position.futuresLeverage ?? 5;
   const direction: 'long' | 'short' = size >= 0 ? 'long' : 'short';
 
   const updateLabel = (sym: string, sz: number) => {
@@ -127,6 +128,17 @@ export function BacktestFuturesCard({
               inputProps={{ min: 0, step: 100 }}
               placeholder="Auto"
               helperText="Leave empty to use first available price"
+            />
+
+            {/* Leverage */}
+            <TextField
+              label="Leverage"
+              size="small"
+              type="number"
+              value={leverage}
+              onChange={e => onUpdate(id, { futuresLeverage: Math.max(1, parseFloat(e.target.value) || 1) })}
+              sx={{ width: 100 }}
+              inputProps={{ min: 1, step: 1 }}
             />
           </Box>
         </CardContent>

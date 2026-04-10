@@ -607,8 +607,9 @@ export function BacktestChart({
                 return [`$${currentPrice.toFixed(2)} (${sign}$${Math.abs(value).toFixed(2)}${pctPart})`, label];
               }
 
-              const pctPart = pct ? ` (${pct})` : '';
-              return [`${sign}$${Math.abs(value).toFixed(2)}${pctPart}`, label];
+              const isFutures = visibleResults.some(r => r.position.id === dataKey && r.position.kind === 'futures');
+              const pctLabel = isFutures && pct ? ` (${pct} on margin)` : pct ? ` (${pct})` : '';
+              return [`${sign}$${Math.abs(value).toFixed(2)}${pctLabel}`, label];
             }}
           />
           <ReferenceLine yAxisId="left" y={0} stroke={isDark ? 'rgba(139,157,195,0.4)' : 'rgba(0,0,0,0.2)'} />

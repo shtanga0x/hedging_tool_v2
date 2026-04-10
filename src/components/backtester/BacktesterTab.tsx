@@ -18,6 +18,7 @@ import Refresh from '@mui/icons-material/Refresh';
 import type {
   BacktestPosition,
   CryptoOption,
+  FuturesCardData,
 } from '../../types';
 import { BacktestChart } from './BacktestChart';
 import { BacktestAddDialog } from './BacktestAddDialog';
@@ -395,6 +396,7 @@ export function BacktesterTab() {
                 label: `${(card.data?.size ?? 0) >= 0 ? 'Long' : 'Short'} ${asset} futures`,
                 color: colorFor(idx++), futuresSymbol: asset,
                 futuresSize: card.data?.size ?? 0,
+                futuresLeverage: (card.data as FuturesCardData)?.leverage ?? 5,
                 entryTimestamp: 0, entryPrice: card.data?.entryPrice ?? 0,
               });
             }
@@ -836,12 +838,15 @@ export function BacktesterTab() {
             newResults.push({ position: pos, pnlSeries: [], entryValue: 0 });
             continue;
           }
-          const entryPrice = spotPts[0].p;
+          const entryPrice = pos.entryPrice > 0 ? pos.entryPrice : spotPts[0].p;
+          const leverage = pos.futuresLeverage ?? 5;
+          const notional = entryPrice * Math.abs(pos.futuresSize!);
+          const margin = notional / leverage;
           const pnlSeries: PnlPoint[] = spotPts.map(pt => ({
             timestamp: pt.t,
             pnl: (pt.p - entryPrice) * pos.futuresSize!,
           }));
-          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: entryPrice * Math.abs(pos.futuresSize!) });
+          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: margin });
         }
       }
 

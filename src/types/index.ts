@@ -214,8 +214,9 @@ export interface BacktestPosition {
   optExpiryMs?: number;  // Unix ms
   optType?: 'Call' | 'Put';
   // futures
-  futuresSymbol?: string; // e.g. "BTC" — fetches Binance klines
-  futuresSize?: number;   // positive = long, negative = short
+  futuresSymbol?: string;   // e.g. "BTC" — fetches Binance klines
+  futuresSize?: number;     // positive = long, negative = short
+  futuresLeverage?: number; // default 5; used to compute margin for % PnL
   // shared
   entryTimestamp: number; // Unix seconds
   entryPrice: number;

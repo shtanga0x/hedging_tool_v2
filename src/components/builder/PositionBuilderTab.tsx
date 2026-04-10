@@ -887,16 +887,27 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary' }}>
                   Futures
                 </Typography>
-                {futuresCards.map((d, i) => (
-                  <Box key={i} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0.5, py: 0.3, pl: 1 }}>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {d.symbol} — {d.size >= 0 ? 'long' : 'short'} ×{Math.abs(d.size)}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      @ ${d.entryPrice.toLocaleString()}
-                    </Typography>
-                  </Box>
-                ))}
+                {futuresCards.map((d, i) => {
+                  const lev = d.leverage ?? 5;
+                  const notional = Math.abs(d.size) * d.entryPrice;
+                  const margin = lev > 0 ? notional / lev : 0;
+                  const asset = ['ETH','SOL','XRP'].find(a => d.symbol.startsWith(a)) ?? 'BTC';
+                  return (
+                    <Box key={i} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0.5, py: 0.3, pl: 1 }}>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                        {d.size >= 0 ? 'Long' : 'Short'} {asset} ×{Math.abs(d.size)}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        @ ${d.entryPrice.toLocaleString()} · ×{lev} lev
+                      </Typography>
+                      {margin > 0 && (
+                        <Typography variant="body2" color="text.secondary">
+                          · margin <strong>${margin.toFixed(2)}</strong>
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                })}
               </Box>
             );
           })()}
