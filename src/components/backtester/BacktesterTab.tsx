@@ -47,8 +47,10 @@ export interface BacktestResult {
   position: BacktestPosition;
   pnlSeries: PnlPoint[];
   entryPrice?: number; // actual entry price used (for chart reference line)
-  /** Cost basis in USD used to compute % P&L. */
+  /** Cost basis in USD used to compute % P&L (includes entryFee). */
   entryValue: number;
+  /** Trading fee paid at entry in USD (0 for maker/bid orders). */
+  entryFee?: number;
   source?: 'deribit' | 'bybit' | 'bybit-bs';
 }
 
@@ -545,7 +547,7 @@ export function BacktesterTab() {
             timestamp: pt.t,
             pnl: (pt.p - entryPrice) * qty - fee,
           }));
-          newResults.push({ position: pos, pnlSeries, entryValue: entryPrice * Math.abs(qty) + fee });
+          newResults.push({ position: pos, pnlSeries, entryValue: entryPrice * Math.abs(qty) + fee, entryFee: fee > 0 ? fee : undefined });
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');

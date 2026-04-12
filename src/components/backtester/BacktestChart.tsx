@@ -313,17 +313,17 @@ export function BacktestChart({
     return out;
   }, [results]);
 
-  // Map from dataKey → { entryValue, qty } for tooltip (option price + % P&L)
+  // Map from dataKey → { entryValue, qty, fee } for tooltip (option price + % P&L + fee)
   // Deribit curves are excluded from portfolio/options totals (display-only; BS is canonical)
-  const entryInfoMap = useMemo((): Record<string, { entryValue: number; qty: number }> => {
-    const m: Record<string, { entryValue: number; qty: number }> = {};
+  const entryInfoMap = useMemo((): Record<string, { entryValue: number; qty: number; fee?: number }> => {
+    const m: Record<string, { entryValue: number; qty: number; fee?: number }> = {};
     let polyTotal = 0, optTotal = 0, total = 0;
     for (const r of visibleResults) {
       const qty = r.position.kind === 'futures'
         ? (r.position.futuresSize ?? 1)
         : (r.position.quantity ?? 0.01);
       const entryValue = normalizedEntryValues[r.position.id] ?? r.entryValue;
-      m[r.position.id] = { entryValue, qty };
+      m[r.position.id] = { entryValue, qty, fee: r.entryFee };
       if (r.source !== 'deribit') total += r.entryValue; // use real entryValue for totals
       if (r.position.kind === 'polymarket') polyTotal += r.entryValue;
       else if (r.source !== 'deribit') optTotal += r.entryValue;
@@ -660,7 +660,8 @@ export function BacktestChart({
 
               const isFutures = visibleResults.some(r => r.position.id === dataKey && r.position.kind === 'futures');
               const pctLabel = isFutures && pct ? ` (${pct} on margin)` : pct ? ` (${pct})` : '';
-              return [`${sign}$${Math.abs(value).toFixed(2)}${pctLabel}`, label];
+              const feeLabel = (info?.fee ?? 0) > 0 ? ` · fee $${info!.fee!.toFixed(2)}` : '';
+              return [`${sign}$${Math.abs(value).toFixed(2)}${pctLabel}${feeLabel}`, label];
             }}
           />
           <ReferenceLine yAxisId="left" y={0} stroke={isDark ? 'rgba(139,157,195,0.4)' : 'rgba(0,0,0,0.2)'} />
