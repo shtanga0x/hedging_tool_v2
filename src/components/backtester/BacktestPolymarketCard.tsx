@@ -14,6 +14,8 @@ import {
   Checkbox,
   TextField,
   Chip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import Delete from '@mui/icons-material/Delete';
 import ExpandLess from '@mui/icons-material/ExpandLess';
@@ -30,6 +32,20 @@ import { PolymarketSearch } from '../shared/PolymarketSearch';
 import { detectEventDisplayType, formatPolyExpiry } from '../../api/polymarket';
 
 const POLY_COLOR = '#4A90D9';
+
+type PriceMode = 'bid' | 'mid' | 'ask';
+
+function getEntryPrice(market: { currentPrice: number; bestBid?: number; bestAsk?: number }, side: 'YES' | 'NO', mode: PriceMode): number {
+  if (side === 'YES') {
+    if (mode === 'ask') return market.bestAsk ?? market.currentPrice;
+    if (mode === 'bid') return market.bestBid ?? market.currentPrice;
+    return market.currentPrice;
+  } else {
+    if (mode === 'ask') return 1 - (market.bestBid ?? market.currentPrice);
+    if (mode === 'bid') return 1 - (market.bestAsk ?? market.currentPrice);
+    return 1 - market.currentPrice;
+  }
+}
 
 interface StrikeSelection {
   marketId: string;
@@ -59,11 +75,11 @@ export function BacktestPolymarketCard({
   startIndex,
 }: BacktestPolymarketCardProps) {
   const [polyMarkets, setPolyMarkets] = useState<ParsedMarket[]>(() => {
-    // Reconstruct from existing positions if they have data
     return [];
   });
   const [polyEvent, setPolyEvent] = useState<PolymarketEvent | null>(null);
   const [polyOptType, setPolyOptType] = useState<'above' | 'hit' | 'price'>('above');
+  const [priceMode, setPriceMode] = useState<PriceMode>(() => (positions[0]?.polyPriceMode ?? 'ask'));
   const [strikeSelections, setStrikeSelections] = useState<Map<string, StrikeSelection>>(() => {
     // Reconstruct selections from existing positions
     const map = new Map<string, StrikeSelection>();
@@ -100,7 +116,7 @@ export function BacktestPolymarketCard({
         next.set(key, { marketId: market.id, side, quantity: 100 });
       }
       // Rebuild positions from selections
-      rebuildPositions(next, polyMarkets, polyOptType, polyEvent);
+      rebuildPositions(next, polyMarkets, polyOptType, polyEvent, priceMode);
       return next;
     });
   };
@@ -111,7 +127,7 @@ export function BacktestPolymarketCard({
       const next = new Map(prev);
       const existing = next.get(key);
       if (existing) next.set(key, { ...existing, quantity });
-      rebuildPositions(next, polyMarkets, polyOptType, polyEvent);
+      rebuildPositions(next, polyMarkets, polyOptType, polyEvent, priceMode);
       return next;
     });
   };
@@ -121,6 +137,7 @@ export function BacktestPolymarketCard({
     markets: ParsedMarket[],
     optType: string,
     event: PolymarketEvent | null,
+    mode: PriceMode,
   ) => {
     const newPositions: BacktestPosition[] = [];
     let idx = 0;
@@ -138,7 +155,8 @@ export function BacktestPolymarketCard({
         polySide: sel.side,
         quantity: sel.quantity,
         entryTimestamp: 0,
-        entryPrice: 0,
+        entryPrice: getEntryPrice(market, sel.side, mode),
+        polyPriceMode: mode,
         polyEventSlug: event?.slug,
       });
       idx++;
@@ -186,7 +204,32 @@ export function BacktestPolymarketCard({
           )}
 
           {polyMarkets.length > 0 && (
-            <Box sx={{ overflowX: 'auto', mt: 1 }}>
+            <>
+              {/* Price mode toggle */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 1 }}>
+                <Typography variant="caption" color="text.secondary">Entry price:</Typography>
+                <ToggleButtonGroup
+                  size="small"
+                  exclusive
+                  value={priceMode}
+                  onChange={(_, v) => {
+                    if (!v) return;
+                    setPriceMode(v);
+                    // Rebuild all active selections with the new mode
+                    rebuildPositions(strikeSelections, polyMarkets, polyOptType, polyEvent, v);
+                  }}
+                  sx={{ height: 26 }}
+                >
+                  <ToggleButton value="bid" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', color: '#EF4444', '&.Mui-selected': { bgcolor: 'rgba(239,68,68,0.12)', color: '#EF4444' } }}>Bid</ToggleButton>
+                  <ToggleButton value="mid" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', '&.Mui-selected': { bgcolor: 'rgba(139,157,195,0.15)' } }}>Mid</ToggleButton>
+                  <ToggleButton value="ask" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', color: '#22C55E', '&.Mui-selected': { bgcolor: 'rgba(34,197,94,0.12)', color: '#22C55E' } }}>Ask</ToggleButton>
+                </ToggleButtonGroup>
+                <Typography variant="caption" color="text.secondary">
+                  {priceMode === 'bid' ? '(limit order · 0 fee)' : priceMode === 'mid' ? '(mid · taker fee)' : '(market order · taker fee)'}
+                </Typography>
+              </Box>
+
+            <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -204,8 +247,8 @@ export function BacktestPolymarketCard({
                     const yesSel = strikeSelections.get(`${market.id}-YES`);
                     const noSel = strikeSelections.get(`${market.id}-NO`);
                     const isActive = !!(yesSel || noSel);
-                    const yesAsk = market.bestAsk ?? market.currentPrice;
-                    const noAsk = market.bestBid != null ? 1 - market.bestBid : 1 - market.currentPrice;
+                    const yesP = getEntryPrice(market, 'YES', priceMode);
+                    const noP  = getEntryPrice(market, 'NO',  priceMode);
                     return (
                       <TableRow key={market.id} selected={isActive} hover>
                         <TableCell>
@@ -214,7 +257,7 @@ export function BacktestPolymarketCard({
                           </Typography>
                         </TableCell>
                         <TableCell align="right" sx={{ color: 'success.main', whiteSpace: 'nowrap' }}>
-                          {(yesAsk * 100).toFixed(1)}&cent;
+                          {(yesP * 100).toFixed(1)}&cent;
                         </TableCell>
                         <TableCell padding="checkbox" align="center">
                           <Checkbox
@@ -237,7 +280,7 @@ export function BacktestPolymarketCard({
                           )}
                         </TableCell>
                         <TableCell align="right" sx={{ color: 'warning.main', whiteSpace: 'nowrap' }}>
-                          {(noAsk * 100).toFixed(1)}&cent;
+                          {(noP * 100).toFixed(1)}&cent;
                         </TableCell>
                         <TableCell padding="checkbox" align="center">
                           <Checkbox
@@ -265,6 +308,7 @@ export function BacktestPolymarketCard({
                 </TableBody>
               </Table>
             </Box>
+            </>
           )}
 
           {selCount > 0 && (

@@ -85,7 +85,7 @@ export function PolymarketCard({
   const [hedgeMarket, setHedgeMarket] = useState<ParsedMarket | null>(null);
   const [hedgeSide, setHedgeSide] = useState<'YES' | 'NO'>('NO');
   const [loadingEvent, setLoadingEvent] = useState(false);
-  const [priceMode, setPriceMode] = useState<PriceMode>('ask');
+  const [priceMode, setPriceMode] = useState<PriceMode>(data.priceMode ?? 'ask');
   const [reloading, setReloading] = useState(false);
 
   const update = useCallback((patch: Partial<PolymarketCardData>) => {
@@ -161,10 +161,11 @@ export function PolymarketCard({
     });
   };
 
-  // When price mode changes, update entry prices of all existing selections
+  // When price mode changes, update entry prices of all existing selections and persist mode
   const handlePriceModeChange = (newMode: PriceMode) => {
     setPriceMode(newMode);
     update({
+      priceMode: newMode,
       selections: data.selections.map(s => {
         const market = data.markets.find(m => m.id === s.marketId);
         if (!market) return s;

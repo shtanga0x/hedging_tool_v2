@@ -579,7 +579,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
           impliedVol: iv,
           isUpBarrier,
           quantity: sel.quantity,
-          entryFee: polyFeePerShare(sel.entryPrice) * sel.quantity,
+          entryFee: (d.priceMode ?? 'ask') !== 'bid' ? polyFeePerShare(sel.entryPrice) * sel.quantity : 0,
           optionType: d.optionType,
           endDate: market.endDate,
         });

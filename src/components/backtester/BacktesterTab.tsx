@@ -29,7 +29,7 @@ import { fetchPriceHistory, formatPolyExpiry } from '../../api/polymarket';
 import { fetchDeribitCandles, fetchDeribitStrikes, resolveDeribitInstrument, fetchDeribitVolIndex, fetchDeribitTradesAsCandles } from '../../api/deribit';
 import { parseBybitSymbol } from '../../api/bybit';
 import { fetchBybitLibraryMidprice } from '../../api/bybit_library';
-import { bsPrice, bsImpliedVol } from '../../pricing/engine';
+import { bsPrice, bsImpliedVol, polyFeePerShare } from '../../pricing/engine';
 import { fetchCryptoCandles, fetchCryptoPriceHistory } from '../../api/binance';
 import type { OHLCCandle } from '../../api/binance';
 
@@ -536,11 +536,16 @@ export function BacktesterTab() {
           // Use first visible (non-zero) point as baseline so the line starts at $0 on the graph
           const entryPrice = history[0].p;
           const qty = pos.quantity ?? 100;
+          // Taker fee (mid/ask entry): deducted as one-time cost at open.
+          // Bid (maker/limit) entry: 0 fee (maker rebate, treated as no cost).
+          const fee = (pos.polyPriceMode ?? 'ask') !== 'bid'
+            ? polyFeePerShare(entryPrice) * Math.abs(qty)
+            : 0;
           const pnlSeries: PnlPoint[] = history.map(pt => ({
             timestamp: pt.t,
-            pnl: (pt.p - entryPrice) * qty,
+            pnl: (pt.p - entryPrice) * qty - fee,
           }));
-          newResults.push({ position: pos, pnlSeries, entryValue: entryPrice * Math.abs(qty) });
+          newResults.push({ position: pos, pnlSeries, entryValue: entryPrice * Math.abs(qty) + fee });
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');

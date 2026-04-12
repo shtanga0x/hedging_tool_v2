@@ -161,6 +161,7 @@ export interface PolymarketCardData {
   crypto: CryptoOption | null;
   markets: ParsedMarket[];
   selections: { marketId: string; side: Side; quantity: number; entryPrice: number }[];
+  priceMode?: 'bid' | 'mid' | 'ask'; // entry type; default 'ask'. 'bid' = maker/0-fee
   minimized: boolean;
 }
 
@@ -204,6 +205,7 @@ export interface BacktestPosition {
   tokenId?: string;
   polySide?: 'YES' | 'NO';
   polyEventSlug?: string;
+  polyPriceMode?: 'bid' | 'mid' | 'ask'; // entry type; 'bid'=maker/0-fee, others apply taker fee
   // deribit / bybit options
   instrumentName?: string; // e.g. "BTC-28MAR25-100000-C" or "BTC-28MAR25-100000-C-USDT"
   quantity?: number;
