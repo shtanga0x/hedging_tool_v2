@@ -27,6 +27,7 @@ interface PortfolioCurvesInput {
   smile?: SmilePoint[];
   bybitSmile?: SmilePoint[]; // IV smile from Bybit option chain (sticky-moneyness)
   numPoints?: number; // default 500
+  spotPrice?: number;        // Current spot price — used to anchor "Now" curves at P&L = -fees
 }
 
 interface PortfolioCurvesOutput {
@@ -177,6 +178,28 @@ function computeBybitOnlyCurve(
   return points;
 }
 
+/** Shift a curve so that P&L at the spot price equals `expectedPnl`.
+ *  This anchors the "Now" snapshot to zero (minus fees) at the current market price,
+ *  correcting for smile-IV artifacts where interpolated IV ≠ markIv at current spot. */
+function anchorCurveAtSpot(
+  curve: ProjectionPoint[],
+  grid: number[],
+  spotPrice: number,
+  expectedPnl: number,
+): ProjectionPoint[] {
+  if (curve.length === 0) return curve;
+  // Find grid index closest to spotPrice
+  let idx = 0;
+  let minDist = Infinity;
+  for (let i = 0; i < grid.length; i++) {
+    const d = Math.abs(grid[i] - spotPrice);
+    if (d < minDist) { minDist = d; idx = i; }
+  }
+  const offset = curve[idx].pnl - expectedPnl;
+  if (Math.abs(offset) < 1e-9) return curve;
+  return curve.map(pt => ({ ...pt, pnl: pt.pnl - offset }));
+}
+
 export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurvesOutput {
   const {
     polyPositions,
@@ -190,6 +213,7 @@ export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurves
     smile,
     bybitSmile,
     numPoints = 2000,
+    spotPrice,
   } = input;
 
   return useMemo(() => {
@@ -252,7 +276,7 @@ export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurves
 
     // Individual source overlay curves (for when both sources present)
     // Use shared grid so all curves align by index
-    const polyNowCurve = computePolyOnlyCurve(
+    let polyNowCurve = computePolyOnlyCurve(
       polyPositions, grid,
       polyTauNow, optionType, autoH(polyTauNow), smile,
       nowSec,
@@ -272,7 +296,7 @@ export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurves
       bybitTausNow.set(pos.symbol, Math.max(((pos.expiryTimestamp / 1000) - nowSec) / YEAR_SEC, 0));
       bybitTausExpiry.set(pos.symbol, 0);
     }
-    const bybitNowCurve = computeBybitOnlyCurve(bybitPositions, grid, bybitTausNow, bybitSmile);
+    let bybitNowCurve = computeBybitOnlyCurve(bybitPositions, grid, bybitTausNow, bybitSmile);
     const bybitExpiryCurve = computeBybitOnlyCurve(bybitPositions, grid, bybitTausExpiry, bybitSmile);
 
     // Poly at Bybit option expiry (only when Bybit expires before Poly)
@@ -307,6 +331,26 @@ export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurves
       totalFees += b.entryFee;
     }
 
+    // Anchor "Now" curves at current spot so P&L(spot) = -fees (not positive due to smile IV artifacts).
+    // The bybitSmile can give a different IV than markIv for OTM options, causing bsPrice > entryPrice
+    // at the current spot. We correct by shifting all Now curves so the result at spot = -totalFees.
+    if (spotPrice != null && spotPrice > 0) {
+      const totalBybitFees = bybitPositions.reduce((s, b) => s + b.entryFee, 0);
+      const totalPolyFees  = polyPositions.reduce((s, p) => s + p.entryFee, 0);
+      // Anchor individual source Now curves
+      if (bybitNowCurve.length > 0) {
+        bybitNowCurve = anchorCurveAtSpot(bybitNowCurve, grid, spotPrice, -totalBybitFees);
+      }
+      if (polyNowCurve.length > 0) {
+        polyNowCurve = anchorCurveAtSpot(polyNowCurve, grid, spotPrice, -totalPolyFees);
+      }
+      // Anchor the combined Now snapshot (index 0)
+      if (combinedCurves.length > 0 && combinedCurves[0].length > 0) {
+        const futuresPnlAtSpot = futuresPositions.reduce((s, fp) => s + (spotPrice - fp.entryPrice) * fp.size, 0);
+        combinedCurves[0] = anchorCurveAtSpot(combinedCurves[0], grid, spotPrice, -totalFees + futuresPnlAtSpot);
+      }
+    }
+
     // Futures now curve: linear P&L
     const futuresNowCurve: ProjectionPoint[] = futuresPositions.length > 0
       ? grid.map(cryptoPrice => ({
@@ -329,5 +373,5 @@ export function usePortfolioCurves(input: PortfolioCurvesInput): PortfolioCurves
       totalEntryCost,
       totalFees,
     };
-  }, [polyPositions, bybitPositions, futuresPositions, lowerPrice, upperPrice, polyTauNow, polyExpiryTs, optionType, smile, bybitSmile, numPoints]);
+  }, [polyPositions, bybitPositions, futuresPositions, lowerPrice, upperPrice, polyTauNow, polyExpiryTs, optionType, smile, bybitSmile, numPoints, spotPrice]);
 }

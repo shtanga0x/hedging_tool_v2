@@ -651,6 +651,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     smile,
     bybitSmile,
     numPoints: 800,
+    spotPrice: spotPrice > 0 ? spotPrice : undefined,
   });
 
   const cryptoSymbol = primaryCrypto ?? 'BTC';

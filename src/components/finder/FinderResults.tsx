@@ -215,6 +215,7 @@ export function VizCard({
     optionType,
     smile: smile.length > 0 ? smile : undefined,
     numPoints: 500,
+    spotPrice,
   });
 
   return (
