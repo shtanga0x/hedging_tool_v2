@@ -340,7 +340,13 @@ export function OptionsCard({
 
           <Box sx={{ mb: 2 }}>
             <Select size="small" value={selectedExpiry}
-              onChange={e => setSelectedExpiry(e.target.value as number | '')}
+              onChange={e => {
+                setSelectedExpiry(e.target.value as number | '');
+                // Clear all selected positions when expiry changes — stale strikes are no longer valid
+                setCallQty(new Map());
+                setPutQty(new Map());
+                update({ selectedOptions: [] });
+              }}
               displayEmpty sx={{ minWidth: 240 }} disabled={loading}
             >
               <MenuItem value="">Select expiry...</MenuItem>
