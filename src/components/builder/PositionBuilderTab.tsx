@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas';
 import {
   Alert,
   Box,
+  Chip,
   Divider,
   Fab,
   Paper,
@@ -707,40 +708,44 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                   Earliest expiry: {groupExpiryLabel}
                 </Typography>
               )}
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', ml: 'auto' }}>
-                <TextField
-                  label="Min Price"
-                  size="small"
-                  type="number"
-                  value={priceRange[0]}
-                  onChange={e => setPriceRange([parseInt(e.target.value) || priceRange[0], priceRange[1]])}
-                  sx={{ width: 120 }}
-                  inputProps={{ step: 1000 }}
-                />
-                <TextField
-                  label="Max Price"
-                  size="small"
-                  type="number"
-                  value={priceRange[1]}
-                  onChange={e => setPriceRange([priceRange[0], parseInt(e.target.value) || priceRange[1]])}
-                  sx={{ width: 120 }}
-                  inputProps={{ step: 1000 }}
-                />
-              </Box>
             </Box>
-            {spotPrice > 0 && (
-              <Box sx={{ px: 2, mb: 1 }}>
-                <Slider
-                  value={priceRange}
-                  onChange={(_, v) => setPriceRange(v as [number, number])}
-                  min={sliderBounds[0]}
-                  max={sliderBounds[1]}
-                  step={sliderStep}
-                  valueLabelDisplay="auto"
-                  valueLabelFormat={v => `$${v.toLocaleString()}`}
-                />
+
+            {/* Selected position chips — similar to position finder */}
+            {(polyPositions.length > 0 || bybitPositions.length > 0 || cards.some(c => c.kind === 'futures')) && (
+              <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1.5 }}>
+                {polyPositions.map((pos, i) => (
+                  <Chip
+                    key={i}
+                    label={`● ${pos.side} ${pos.groupItemTitle} ×${pos.quantity} @ ${(pos.entryPrice * 100).toFixed(1)}¢`}
+                    size="small"
+                    sx={{ bgcolor: '#4A90D9', color: '#fff', fontFamily: 'monospace', fontSize: '0.72rem' }}
+                  />
+                ))}
+                {bybitPositions.map((pos, i) => (
+                  <Chip
+                    key={i}
+                    label={`${pos.side === 'buy' ? '●' : '✕'} ${pos.side === 'buy' ? 'Long' : 'Short'} ${pos.symbol} ×${pos.quantity} @ $${pos.entryPrice.toFixed(0)}`}
+                    size="small"
+                    sx={{ bgcolor: '#FF8C00', color: '#fff', fontFamily: 'monospace', fontSize: '0.72rem' }}
+                  />
+                ))}
+                {cards.filter(c => c.kind === 'futures').map((c, i) => {
+                  const d = c.data as FuturesCardData;
+                  if (!d.entryPrice || !d.size) return null;
+                  const asset = ['ETH','SOL','XRP'].find(a => d.symbol.startsWith(a)) ?? 'BTC';
+                  const lev = d.leverage ?? 5;
+                  return (
+                    <Chip
+                      key={i}
+                      label={`● ${d.size >= 0 ? 'Long' : 'Short'} ${asset} ×${Math.abs(d.size)} @ $${d.entryPrice.toLocaleString()} ×${lev}`}
+                      size="small"
+                      sx={{ bgcolor: 'text.secondary', color: '#fff', fontFamily: 'monospace', fontSize: '0.72rem' }}
+                    />
+                  );
+                })}
               </Box>
             )}
+
             <ProjectionChart
               combinedCurves={curves.combinedCurves}
               combinedLabels={curves.combinedLabels}
@@ -756,6 +761,43 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               polyEntryCost={curves.polyEntryCost}
               bybitEntryCost={curves.bybitEntryCost}
             />
+
+            {/* Price range slider — moved below chart */}
+            {spotPrice > 0 && (
+              <Box sx={{ mt: 1.5 }}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'flex-end', mb: 0.5 }}>
+                  <TextField
+                    label="Min Price"
+                    size="small"
+                    type="number"
+                    value={priceRange[0]}
+                    onChange={e => setPriceRange([parseInt(e.target.value) || priceRange[0], priceRange[1]])}
+                    sx={{ width: 120 }}
+                    inputProps={{ step: 1000 }}
+                  />
+                  <TextField
+                    label="Max Price"
+                    size="small"
+                    type="number"
+                    value={priceRange[1]}
+                    onChange={e => setPriceRange([priceRange[0], parseInt(e.target.value) || priceRange[1]])}
+                    sx={{ width: 120 }}
+                    inputProps={{ step: 1000 }}
+                  />
+                </Box>
+                <Box sx={{ px: 2 }}>
+                  <Slider
+                    value={priceRange}
+                    onChange={(_, v) => setPriceRange(v as [number, number])}
+                    min={sliderBounds[0]}
+                    max={sliderBounds[1]}
+                    step={sliderStep}
+                    valueLabelDisplay="auto"
+                    valueLabelFormat={v => `$${v.toLocaleString()}`}
+                  />
+                </Box>
+              </Box>
+            )}
           </>
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
@@ -764,65 +806,6 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         )}
         </div>
       </Paper>
-
-      {/* Cards */}
-      <Box>
-        {cards.map(card => {
-          if (card.kind === 'polymarket') {
-            return (
-              <PolymarketCard
-                key={card.id}
-                id={card.id}
-                data={card.data as PolymarketCardData}
-                spotPrice={spotPrice}
-                bybitChain={bybitChain}
-                nowSec={nowSec}
-                onUpdate={handleUpdateCard}
-                onRemove={handleRemoveCard}
-                onMinimize={handleMinimizeCard}
-                onAddHedgeLegs={handleAddHedgeLegs}
-                refreshToken={reloadKey}
-              />
-            );
-          }
-          if (card.kind === 'options') {
-            return (
-              <OptionsCard
-                key={card.id}
-                id={card.id}
-                data={card.data as OptionsCardData}
-                spotPrice={spotPrice}
-                onUpdate={handleUpdateCard}
-                onRemove={handleRemoveCard}
-                onMinimize={handleMinimizeCard}
-                onChainLoaded={handleChainLoaded}
-                refreshToken={reloadKey}
-              />
-            );
-          }
-          if (card.kind === 'futures') {
-            return (
-              <FuturesCard
-                key={card.id}
-                id={card.id}
-                data={card.data as FuturesCardData}
-                spotPrice={spotPrice}
-                onUpdate={handleUpdateCard}
-                onRemove={handleRemoveCard}
-                onMinimize={handleMinimizeCard}
-              />
-            );
-          }
-          return null;
-        })}
-
-        {cards.length === 0 && (
-          <Box sx={{ textAlign: 'center', py: 6, color: 'text.secondary' }}>
-            <Typography variant="h6">No positions yet</Typography>
-            <Typography variant="body2">Click the + button to add a position</Typography>
-          </Box>
-        )}
-      </Box>
 
       {/* Position summary */}
       {hasPositions && (
@@ -936,6 +919,65 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
           </Box>
         </Paper>
       )}
+
+      {/* Cards */}
+      <Box>
+        {cards.map(card => {
+          if (card.kind === 'polymarket') {
+            return (
+              <PolymarketCard
+                key={card.id}
+                id={card.id}
+                data={card.data as PolymarketCardData}
+                spotPrice={spotPrice}
+                bybitChain={bybitChain}
+                nowSec={nowSec}
+                onUpdate={handleUpdateCard}
+                onRemove={handleRemoveCard}
+                onMinimize={handleMinimizeCard}
+                onAddHedgeLegs={handleAddHedgeLegs}
+                refreshToken={reloadKey}
+              />
+            );
+          }
+          if (card.kind === 'options') {
+            return (
+              <OptionsCard
+                key={card.id}
+                id={card.id}
+                data={card.data as OptionsCardData}
+                spotPrice={spotPrice}
+                onUpdate={handleUpdateCard}
+                onRemove={handleRemoveCard}
+                onMinimize={handleMinimizeCard}
+                onChainLoaded={handleChainLoaded}
+                refreshToken={reloadKey}
+              />
+            );
+          }
+          if (card.kind === 'futures') {
+            return (
+              <FuturesCard
+                key={card.id}
+                id={card.id}
+                data={card.data as FuturesCardData}
+                spotPrice={spotPrice}
+                onUpdate={handleUpdateCard}
+                onRemove={handleRemoveCard}
+                onMinimize={handleMinimizeCard}
+              />
+            );
+          }
+          return null;
+        })}
+
+        {cards.length === 0 && (
+          <Box sx={{ textAlign: 'center', py: 6, color: 'text.secondary' }}>
+            <Typography variant="h6">No positions yet</Typography>
+            <Typography variant="body2">Click the + button to add a position</Typography>
+          </Box>
+        )}
+      </Box>
 
       {/* Floating add button */}
       <Fab

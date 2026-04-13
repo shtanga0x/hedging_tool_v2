@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Card,
   CardHeader,
@@ -29,7 +29,7 @@ import type {
   Side,
 } from '../../types';
 import { PolymarketSearch } from '../shared/PolymarketSearch';
-import { detectEventDisplayType, formatPolyExpiry } from '../../api/polymarket';
+import { detectEventDisplayType, formatPolyExpiry, fetchEventBySlug, parseMarkets } from '../../api/polymarket';
 
 const POLY_COLOR = '#4A90D9';
 
@@ -80,6 +80,39 @@ export function BacktestPolymarketCard({
   const [polyEvent, setPolyEvent] = useState<PolymarketEvent | null>(null);
   const [polyOptType, setPolyOptType] = useState<'above' | 'hit' | 'price'>('above');
   const [priceMode, setPriceMode] = useState<PriceMode>(() => (positions[0]?.polyPriceMode ?? 'ask'));
+
+  // Auto-load event from positions when component mounts (e.g. after file load)
+  const didAutoLoad = useRef(false);
+  useEffect(() => {
+    if (didAutoLoad.current || positions.length === 0) return;
+    const slug = positions.find(p => p.polyEventSlug)?.polyEventSlug;
+    if (!slug) return;
+    didAutoLoad.current = true;
+    fetchEventBySlug(slug)
+      .then(event => {
+        const markets = parseMarkets(event.markets);
+        setPolyEvent(event);
+        setPolyMarkets(markets);
+        setPolyOptType(detectEventDisplayType(event));
+        // Reconstruct selections from loaded positions
+        const newSels = new Map<string, StrikeSelection>();
+        for (const pos of positions) {
+          if (!pos.tokenId || !pos.polySide) continue;
+          const market = markets.find(m =>
+            pos.polySide === 'YES' ? m.yesTokenId === pos.tokenId : m.noTokenId === pos.tokenId
+          );
+          if (!market) continue;
+          newSels.set(`${market.id}-${pos.polySide}`, {
+            marketId: market.id,
+            side: pos.polySide as Side,
+            quantity: pos.quantity ?? 100,
+          });
+        }
+        setStrikeSelections(newSels);
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [strikeSelections, setStrikeSelections] = useState<Map<string, StrikeSelection>>(() => {
     // Reconstruct selections from existing positions
     const map = new Map<string, StrikeSelection>();
@@ -195,6 +228,19 @@ export function BacktestPolymarketCard({
       />
       {!minimized && (
         <CardContent sx={{ pt: 1 }}>
+          {/* Compact loaded-position summary (shown when positions exist from file load) */}
+          {positions.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
+              {positions.map((pos, i) => (
+                <Chip
+                  key={i}
+                  label={`● ${pos.polySide ?? ''} ${pos.label.split(' · ')[0].replace(/^(YES|NO)\s+/, '')} ×${pos.quantity ?? 0}${pos.entryPrice > 0 ? ` @ ${(pos.entryPrice * 100).toFixed(1)}¢` : ''}`}
+                  size="small"
+                  sx={{ bgcolor: '#4A90D9', color: '#fff', fontFamily: 'monospace', fontSize: '0.72rem' }}
+                />
+              ))}
+            </Box>
+          )}
           <PolymarketSearch onEventLoaded={handleEventLoaded} />
 
           {polyEvent && (
