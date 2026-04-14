@@ -208,7 +208,12 @@ export function BacktesterTab() {
       }
       return pos;
     }));
-    setResults([]); // clear stale chart so user re-runs with new directions
+    // Negate all PnL values in-place so chart updates immediately without re-run
+    // (inverting all positions mathematically flips the sign of every PnL point)
+    setResults(prev => prev.map(r => ({
+      ...r,
+      pnlSeries: r.pnlSeries.map(pt => ({ ...pt, pnl: -pt.pnl })),
+    })));
   }, []);
 
   // Update all positions for a polymarket card group
