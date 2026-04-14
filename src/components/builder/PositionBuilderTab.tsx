@@ -945,16 +945,6 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
           <Divider sx={{ mb: 1.5 }} />
 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<SwapHoriz />}
-              onClick={handleInverse}
-              color="secondary"
-              title="Flip all positions: YES↔NO for Polymarket, buy↔sell for options, long↔short for futures"
-            >
-              Inverse
-            </Button>
             <Typography variant="body2" color="text.secondary">
               Total positions: <strong>{polyPositions.length + bybitPositions.length + futuresPositions.length}</strong>
             </Typography>
@@ -973,6 +963,18 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 {cryptoSymbol}: <strong>${formatPrice(spotPrice)}</strong>
               </Typography>
             )}
+            <Box sx={{ ml: 'auto' }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<SwapHoriz />}
+                onClick={handleInverse}
+                color="secondary"
+                title="Flip all positions: YES↔NO for Polymarket, buy↔sell for options, long↔short for futures"
+              >
+                Inverse
+              </Button>
+            </Box>
           </Box>
         </Paper>
       )}
