@@ -100,7 +100,7 @@ function CustomXTick(props: {
 }) {
   const { x, y, payload, majorInterval, minorInterval, tickColor, tickColorFaded } = props;
   const value = payload.value;
-  const isMajor = Math.abs((value / majorInterval) - Math.round(value / majorInterval)) < 1e-6;
+  const isMajor = Math.round(value / minorInterval) % 5 === 0;
 
   if (isMajor) {
     return (
@@ -450,10 +450,13 @@ export function ProjectionChart({
     const { major, minor } = getAdaptiveTickIntervals(range, chartWidth);
 
     const ticks: number[] = [];
-    const start = Math.ceil(min / minor) * minor;
     const tickDec = minor < 1 ? Math.ceil(-Math.log10(minor)) : 0;
     const tickFactor = Math.pow(10, tickDec);
-    for (let v = start; v <= max; v += minor) ticks.push(Math.round(v * tickFactor) / tickFactor);
+    const startIdx = Math.ceil(min / minor - 1e-9);
+    const endIdx = Math.floor(max / minor + 1e-9);
+    for (let i = startIdx; i <= endIdx; i++) {
+      ticks.push(Math.round(i * minor * tickFactor) / tickFactor);
+    }
     return { allTicks: ticks, majorInterval: major, minorInterval: minor, xDomain: [min, max] };
   }, [chartData, chartWidth]);
 
