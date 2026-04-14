@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTheme } from '@mui/material/styles';
-import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip } from '@mui/material';
+import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip, Slider } from '@mui/material';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import ZoomIn from '@mui/icons-material/ZoomIn';
 import ZoomOut from '@mui/icons-material/ZoomOut';
@@ -250,9 +250,16 @@ export function BacktestChart({
   const [rightAxisOffset, setRightAxisOffset] = useState(0);
   const [smoothing, setSmoothing]         = useState(false);
   const [endAlign, setEndAlign]           = useState(true);
+  // Time curtains: fraction of [startTimestamp, endTimestamp] that is visible
+  const [curtainFrac, setCurtainFrac]     = useState<[number, number]>([0, 1]);
 
   const portfolioColor = isDark ? '#EAEAEA' : '#1A2332';
   const showCrypto     = !!cryptoOverlay && cryptoCandles.length > 0;
+
+  // Visible time range derived from curtain fractions
+  const totalRange    = endTimestamp - startTimestamp;
+  const visibleStartTs = startTimestamp + curtainFrac[0] * totalRange;
+  const visibleEndTs   = startTimestamp + curtainFrac[1] * totalRange;
   const cryptoColor    = cryptoOverlay ? (CRYPTO_COLORS[cryptoOverlay] ?? '#F7931A') : '#F7931A';
   const legendColor    = isDark ? '#8B9DC3' : '#5A6A85';
   const tooltipBg      = isDark ? '#131A2A' : '#FFFFFF';
@@ -444,7 +451,7 @@ export function BacktestChart({
         const candidate = group.find(r => r.source === src);
         if (!candidate) continue;
         const filtered = candidate.pnlSeries.filter(
-          pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
+          pt => pt.timestamp >= visibleStartTs && pt.timestamp <= visibleEndTs
         );
         if (filtered.length === 0) continue;
         refResult = candidate;
@@ -457,7 +464,7 @@ export function BacktestChart({
       for (const r of group) {
         if (r === refResult) continue;
         const filtered = r.pnlSeries.filter(
-          pt => pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp
+          pt => pt.timestamp >= visibleStartTs && pt.timestamp <= visibleEndTs
         );
         if (filtered.length === 0) continue;
         const lastPnl = filtered[filtered.length - 1].pnl;
@@ -465,7 +472,7 @@ export function BacktestChart({
       }
     }
     return offsets;
-  }, [endAlign, results, startTimestamp, endTimestamp]);
+  }, [endAlign, results, visibleStartTs, visibleEndTs]);
 
   // ─── Chart data ─────────────────────────────────────────────────────────────
   // Build sorted, range-filtered, optionally downsampled timestamp list
@@ -476,14 +483,14 @@ export function BacktestChart({
     const allTs = new Set<number>();
     for (const r of visibleResults) {
       for (const pt of r.pnlSeries) {
-        if (pt.timestamp >= startTimestamp && pt.timestamp <= endTimestamp) {
+        if (pt.timestamp >= visibleStartTs && pt.timestamp <= visibleEndTs) {
           allTs.add(pt.timestamp);
         }
       }
     }
     // Always include the range endpoints so lines start/end cleanly
-    allTs.add(startTimestamp);
-    allTs.add(endTimestamp);
+    allTs.add(visibleStartTs);
+    allTs.add(visibleEndTs);
 
     let sortedTs = Array.from(allTs).sort((a, b) => a - b);
 
@@ -513,7 +520,18 @@ export function BacktestChart({
       }
       return row;
     });
-  }, [visibleResults, startTimestamp, endTimestamp, smoothing, showCrypto, cryptoOverlay, cryptoCandles]);
+  }, [visibleResults, visibleStartTs, visibleEndTs, smoothing, showCrypto, cryptoOverlay, cryptoCandles]);
+
+  // PnL baselines: value at first visible data point — tooltip shows delta from here
+  const pnlBaselines = useMemo((): Record<string, number> => {
+    if (chartData.length === 0) return {};
+    const firstRow = chartData[0];
+    const out: Record<string, number> = {};
+    for (const key of Object.keys(firstRow)) {
+      if (key !== 'timestamp') out[key] = (firstRow[key] as number) ?? 0;
+    }
+    return out;
+  }, [chartData]);
 
   // Marker indices: ~MARKERS_PER_LINE evenly-spaced indices per line
   const markerIndices = useMemo(() => {
@@ -592,7 +610,7 @@ export function BacktestChart({
             dataKey="timestamp"
             tickFormatter={formatDate}
             type="number"
-            domain={[startTimestamp, endTimestamp]}
+            domain={[visibleStartTs, visibleEndTs]}
             tick={{ fill: isDark ? '#8B9DC3' : '#5A6A85', fontSize: 12 }}
           />
           <YAxis
@@ -637,13 +655,16 @@ export function BacktestChart({
               if (!name || name.startsWith('__')) return null;
               if (name === cryptoOverlay) return [`$${Math.round(value).toLocaleString()}`, name];
               const dataKey = typeof props?.dataKey === 'string' ? props.dataKey : '';
+              // Normalize PnL relative to first visible data point
+              const baseline = pnlBaselines[dataKey] ?? 0;
+              const normalizedValue = value - baseline;
               const info = entryInfoMap[dataKey];
               const entryVal = Math.abs(info?.entryValue ?? 0);
               const pct = entryVal > 0
-                ? `${value >= 0 ? '+' : ''}${((value / entryVal) * 100).toFixed(2)}%`
+                ? `${normalizedValue >= 0 ? '+' : ''}${((normalizedValue / entryVal) * 100).toFixed(2)}%`
                 : null;
               const label = dataKey === 'portfolio' ? 'Total PnL' : name;
-              const sign = value >= 0 ? '+' : '';
+              const sign = normalizedValue >= 0 ? '+' : '';
 
               // Option positions: show current option price prominently
               const isOption = visibleResults.some(
@@ -655,13 +676,13 @@ export function BacktestChart({
                 const unshiftedPnl = value - (endAlignOffsets[dataKey] ?? 0);
                 const currentPrice = entryPrice + unshiftedPnl / qty;
                 const pctPart = pct ? ` / ${pct}` : '';
-                return [`$${currentPrice.toFixed(2)} (${sign}$${Math.abs(value).toFixed(2)}${pctPart})`, label];
+                return [`$${currentPrice.toFixed(2)} (${sign}$${Math.abs(normalizedValue).toFixed(2)}${pctPart})`, label];
               }
 
               const isFutures = visibleResults.some(r => r.position.id === dataKey && r.position.kind === 'futures');
               const pctLabel = isFutures && pct ? ` (${pct} on margin)` : pct ? ` (${pct})` : '';
               const feeLabel = (info?.fee ?? 0) > 0 ? ` · fee $${info!.fee!.toFixed(2)}` : '';
-              return [`${sign}$${Math.abs(value).toFixed(2)}${pctLabel}${feeLabel}`, label];
+              return [`${sign}$${Math.abs(normalizedValue).toFixed(2)}${pctLabel}${feeLabel}`, label];
             }}
           />
           <ReferenceLine yAxisId="left" y={0} stroke={isDark ? 'rgba(139,157,195,0.4)' : 'rgba(0,0,0,0.2)'} />
@@ -722,12 +743,58 @@ export function BacktestChart({
             <Customized
               component={CandlestickLayer}
               candles={cryptoCandles}
-              xDomain={[startTimestamp, endTimestamp] as [number, number]}
+              xDomain={[visibleStartTs, visibleEndTs] as [number, number]}
               yDomain={cryptoPriceRange}
             />
           )}
         </ComposedChart>
       </ResponsiveContainer>
+
+      {/* Time-range curtain slider */}
+      <Box sx={{ px: '52px', pt: 0.5, pb: 0 }}>
+        <Slider
+          value={[Math.round(curtainFrac[0] * 1000), Math.round(curtainFrac[1] * 1000)]}
+          min={0}
+          max={1000}
+          disableSwap
+          size="small"
+          onChange={(_, val) => {
+            const [l, r] = val as number[];
+            setCurtainFrac([l / 1000, r / 1000]);
+          }}
+          valueLabelDisplay="auto"
+          valueLabelFormat={v =>
+            new Date((startTimestamp + (v / 1000) * totalRange) * 1000)
+              .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
+          }
+          sx={{
+            '& .MuiSlider-track': { bgcolor: isDark ? '#4A90D9' : '#1565C0', opacity: 0.7 },
+            '& .MuiSlider-rail': { bgcolor: isDark ? 'rgba(139,157,195,0.25)' : 'rgba(0,0,0,0.15)', opacity: 1 },
+            '& .MuiSlider-thumb': { width: 14, height: 14 },
+          }}
+        />
+      </Box>
+      {/* Date range labels + reset */}
+      <Box sx={{ px: '52px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+        <span style={{ fontSize: 11, color: isDark ? '#8B9DC3' : '#5A6A85' }}>
+          {new Date(visibleStartTs * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+        </span>
+        {(curtainFrac[0] > 0.001 || curtainFrac[1] < 0.999) && (
+          <button
+            onClick={() => setCurtainFrac([0, 1])}
+            style={{
+              background: 'transparent', border: `1px solid ${isDark ? '#8B9DC3' : '#5A6A85'}`,
+              color: isDark ? '#8B9DC3' : '#5A6A85', fontSize: 11, padding: '1px 8px',
+              borderRadius: 4, cursor: 'pointer',
+            }}
+          >
+            Reset
+          </button>
+        )}
+        <span style={{ fontSize: 11, color: isDark ? '#8B9DC3' : '#5A6A85' }}>
+          {new Date(visibleEndTs * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+        </span>
+      </Box>
 
       {/* Controls */}
       <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1.5, px: 1 }}>

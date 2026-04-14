@@ -98,7 +98,7 @@ function CustomXTick(props: {
   tickColor: string;
   tickColorFaded: string;
 }) {
-  const { x, y, payload, majorInterval, minorInterval, tickColor, tickColorFaded } = props;
+  const { x, y, payload, minorInterval, tickColor, tickColorFaded } = props;
   const value = payload.value;
   const isMajor = Math.round(value / minorInterval) % 5 === 0;
 
