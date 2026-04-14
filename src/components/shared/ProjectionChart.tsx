@@ -70,6 +70,19 @@ function getAdaptiveTickIntervals(range: number, chartWidth: number): { major: n
   return { major: bestMajor, minor: bestMajor / 5 };
 }
 
+
+/** Format a crypto price with precision appropriate to its magnitude.
+ *  >= $1000 → 0 decimals (BTC, ETH)  |  >= $100 → 1 decimal (SOL)
+ *  >= $10 → 2 decimals  |  >= $1 → 3 decimals (XRP)  |  < $1 → 4 decimals (DOGE) */
+function formatPrice(price: number): string {
+  const abs = Math.abs(price);
+  if (abs >= 1000) return price.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (abs >= 100)  return price.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  if (abs >= 10)   return price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1)    return price.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  return price.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 function formatPct(value: number): string {
   const sign = value >= 0 ? '+' : '';
   return `${sign}${value.toFixed(1)}%`;
@@ -85,16 +98,16 @@ function CustomXTick(props: {
   tickColor: string;
   tickColorFaded: string;
 }) {
-  const { x, y, payload, majorInterval, tickColor, tickColorFaded } = props;
+  const { x, y, payload, majorInterval, minorInterval, tickColor, tickColorFaded } = props;
   const value = payload.value;
-  const isMajor = value % majorInterval === 0;
+  const isMajor = Math.abs((value / majorInterval) - Math.round(value / majorInterval)) < 1e-6;
 
   if (isMajor) {
     return (
       <g transform={`translate(${x},${y})`}>
         <line y1={0} y2={8} stroke={tickColor} strokeWidth={1} />
         <text y={22} textAnchor="middle" fill={tickColor} fontSize={13} fontFamily="JetBrains Mono, monospace">
-          ${value.toLocaleString()}
+          ${formatPrice(value)}
         </text>
       </g>
     );
@@ -243,7 +256,7 @@ function CustomTooltipContent({
       maxWidth: 500,
     }}>
       <div style={{ color: secondaryColor, marginBottom: 6, fontSize: 15 }}>
-        {cryptoSymbol}: ${cryptoPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({formatPct(pricePct)})
+        {cryptoSymbol}: ${formatPrice(cryptoPrice)} ({formatPct(pricePct)})
       </div>
 
       {/* Combined curves — all show absolute % */}
@@ -438,7 +451,9 @@ export function ProjectionChart({
 
     const ticks: number[] = [];
     const start = Math.ceil(min / minor) * minor;
-    for (let v = start; v <= max; v += minor) ticks.push(Math.round(v));
+    const tickDec = minor < 1 ? Math.ceil(-Math.log10(minor)) : 0;
+    const tickFactor = Math.pow(10, tickDec);
+    for (let v = start; v <= max; v += minor) ticks.push(Math.round(v * tickFactor) / tickFactor);
     return { allTicks: ticks, majorInterval: major, minorInterval: minor, xDomain: [min, max] };
   }, [chartData, chartWidth]);
 
@@ -622,7 +637,7 @@ export function ProjectionChart({
             x={currentCryptoPrice}
             stroke={refLineColor}
             strokeDasharray="5 5"
-            label={{ value: `Spot: $${currentCryptoPrice.toLocaleString()}`, position: 'top', fill: axisColor, fontSize: 14 }}
+            label={{ value: `Spot: $${formatPrice(currentCryptoPrice)}`, position: 'top', fill: axisColor, fontSize: 14 }}
           />
 
           {/* Invisible line for right Y-axis scale — use first visible combined curve so the

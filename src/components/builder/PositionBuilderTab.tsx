@@ -63,6 +63,16 @@ function roundToNice(value: number, direction: 'down' | 'up'): number {
     : Math.ceil(value / magnitude) * magnitude;
 }
 
+/** Format a crypto price with precision appropriate to its magnitude. */
+function formatPrice(price: number): string {
+  const abs = Math.abs(price);
+  if (abs >= 1000) return price.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (abs >= 100)  return price.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  if (abs >= 10)   return price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1)    return price.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  return price.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 function getEarliestMarketExpiry(data: PolymarketCardData): number {
   let earliest = Infinity;
   for (const market of data.markets) {
@@ -698,7 +708,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               <Typography variant="h6" fontWeight={600}>Portfolio P&L</Typography>
               {spotPrice > 0 && (
                 <Typography variant="body2" color="text.secondary">
-                  Spot: ${spotPrice.toLocaleString()}
+                  Spot: ${formatPrice(spotPrice)}
                 </Typography>
               )}
               {groupExpiryLabel && (
@@ -722,7 +732,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 {bybitPositions.map((pos, i) => (
                   <Chip
                     key={i}
-                    label={`${pos.side === 'buy' ? '●' : '✕'} ${pos.side === 'buy' ? 'Long' : 'Short'} ${pos.symbol} ×${pos.quantity} @ $${pos.entryPrice.toFixed(0)}`}
+                    label={`${pos.side === 'buy' ? '●' : '✕'} ${pos.side === 'buy' ? 'Long' : 'Short'} ${pos.symbol} ×${pos.quantity} @ $${formatPrice(pos.entryPrice)}`}
                     size="small"
                     sx={{ bgcolor: '#FF8C00', color: '#fff', fontFamily: 'monospace', fontSize: '0.72rem' }}
                   />
@@ -791,7 +801,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                     max={sliderBounds[1]}
                     step={sliderStep}
                     valueLabelDisplay="auto"
-                    valueLabelFormat={v => `$${v.toLocaleString()}`}
+                    valueLabelFormat={v => `$${formatPrice(v as number)}`}
                   />
                 </Box>
               </Box>
@@ -847,7 +857,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                       {pos.symbol} — {pos.side} ×{pos.quantity}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      @ ${pos.entryPrice.toFixed(0)}
+                      @ ${formatPrice(pos.entryPrice)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       (total: ${total.toFixed(2)}, fee: ${pos.entryFee.toFixed(2)})
@@ -911,7 +921,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
             )}
             {spotPrice > 0 && (
               <Typography variant="body2" color="text.secondary">
-                {cryptoSymbol}: <strong>${spotPrice.toLocaleString()}</strong>
+                {cryptoSymbol}: <strong>${formatPrice(spotPrice)}</strong>
               </Typography>
             )}
           </Box>
