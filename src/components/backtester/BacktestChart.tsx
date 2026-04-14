@@ -7,6 +7,7 @@ import ZoomOut from '@mui/icons-material/ZoomOut';
 import ZoomOutMap from '@mui/icons-material/ZoomOutMap';
 import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
+import RestartAlt from '@mui/icons-material/RestartAlt';
 import {
   ComposedChart,
   Line,
@@ -250,6 +251,7 @@ export function BacktestChart({
   const [rightAxisOffset, setRightAxisOffset] = useState(0);
   const [smoothing, setSmoothing]         = useState(false);
   const [endAlign, setEndAlign]           = useState(true);
+  const [zeroNorm, setZeroNorm]           = useState(false);
   // Time curtains: fraction of [startTimestamp, endTimestamp] that is visible
   const [curtainFrac, setCurtainFrac]     = useState<[number, number]>([0, 1]);
 
@@ -522,8 +524,8 @@ export function BacktestChart({
     });
   }, [visibleResults, visibleStartTs, visibleEndTs, smoothing, showCrypto, cryptoOverlay, cryptoCandles]);
 
-  // PnL baselines: value at first visible data point — tooltip shows delta from here
-  const pnlBaselines = useMemo((): Record<string, number> => {
+  // Raw PnL at first visible data point (used for % denominator and option price calc)
+  const rawPnlBaselines = useMemo((): Record<string, number> => {
     if (chartData.length === 0) return {};
     const firstRow = chartData[0];
     const out: Record<string, number> = {};
@@ -532,6 +534,32 @@ export function BacktestChart({
     }
     return out;
   }, [chartData]);
+
+  // Zero-normalised display data: shifts every curve so it starts at 0
+  const displayData = useMemo((): ChartDataRow[] => {
+    if (!zeroNorm || chartData.length === 0) return chartData;
+    const firstRow = chartData[0];
+    return chartData.map(row => {
+      const shifted: ChartDataRow = { timestamp: row.timestamp };
+      for (const key of Object.keys(row)) {
+        if (key !== 'timestamp') {
+          shifted[key] = (row[key] as number) - ((firstRow[key] as number) ?? 0);
+        }
+      }
+      return shifted;
+    });
+  }, [chartData, zeroNorm]);
+
+  // Tooltip baselines: 0 when zeroNorm (curves already start at 0), raw otherwise
+  const pnlBaselines = useMemo((): Record<string, number> => {
+    if (displayData.length === 0) return {};
+    const firstRow = displayData[0];
+    const out: Record<string, number> = {};
+    for (const key of Object.keys(firstRow)) {
+      if (key !== 'timestamp') out[key] = (firstRow[key] as number) ?? 0;
+    }
+    return out;
+  }, [displayData]);
 
   // Marker indices: ~MARKERS_PER_LINE evenly-spaced indices per line
   const markerIndices = useMemo(() => {
@@ -602,9 +630,23 @@ export function BacktestChart({
         >
           Align to expiry
         </button>
+        <button
+          onClick={() => setZeroNorm(v => !v)}
+          style={{
+            background: zeroNorm ? (isDark ? '#A78BFA' : '#7C3AED') : 'transparent',
+            border: `1px solid ${zeroNorm ? (isDark ? '#A78BFA' : '#7C3AED') : legendColor}`,
+            color: zeroNorm ? '#fff' : legendColor,
+            fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer', opacity: 0.9,
+            display: 'flex', alignItems: 'center', gap: 3,
+          }}
+          title="Translate all PnL curves so they start from 0 at the left edge of the visible range"
+        >
+          <RestartAlt style={{ fontSize: 13 }} />
+          Move to zero
+        </button>
       </Box>
       <ResponsiveContainer width="100%" height={440}>
-        <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 10, left: 20 }}>
+        <ComposedChart data={displayData} margin={{ top: 20, right: 20, bottom: 10, left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={isDark ? 'rgba(139,157,195,0.12)' : 'rgba(0,0,0,0.08)'} />
           <XAxis
             dataKey="timestamp"
@@ -660,9 +702,9 @@ export function BacktestChart({
               const normalizedValue = value - baseline;
               const info = entryInfoMap[dataKey];
               const entryVal = Math.abs(info?.entryValue ?? 0);
-              // Denominator: position value at first visible point (entryVal + baseline)
-              // This ensures max loss from first visible = -100% (not > 100%)
-              const visibleEntryVal = Math.abs(entryVal + baseline);
+              // Denominator: position value at first visible point (uses raw baseline)
+              const rawBaseline = rawPnlBaselines[dataKey] ?? 0;
+              const visibleEntryVal = Math.abs(entryVal + rawBaseline);
               const pct = visibleEntryVal > 0.001
                 ? `${normalizedValue >= 0 ? '+' : ''}${((normalizedValue / visibleEntryVal) * 100).toFixed(2)}%`
                 : null;
@@ -676,7 +718,9 @@ export function BacktestChart({
               if (isOption) {
                 const qty = info?.qty ?? 0.01;
                 const entryPrice = entryVal / Math.abs(qty);
-                const unshiftedPnl = value - (endAlignOffsets[dataKey] ?? 0);
+                // Reconstruct raw PnL (undo zero-norm shift) before removing endAlign offset
+                const rawPnl = value + rawBaseline;
+                const unshiftedPnl = rawPnl - (endAlignOffsets[dataKey] ?? 0);
                 const currentPrice = entryPrice + unshiftedPnl / qty;
                 const pctPart = pct ? ` / ${pct}` : '';
                 return [`$${currentPrice.toFixed(2)} (${sign}$${Math.abs(normalizedValue).toFixed(2)}${pctPart})`, label];
