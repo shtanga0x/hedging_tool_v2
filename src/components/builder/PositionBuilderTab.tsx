@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import html2canvas from 'html2canvas';
+import { toBlob as elementToBlob } from 'html-to-image';
 import {
   Alert,
   Box,
@@ -379,16 +379,15 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     URL.revokeObjectURL(url);
 
     if (chartRef.current) {
-      const canvas = await html2canvas(chartRef.current, { useCORS: true, scale: 2 });
-      canvas.toBlob(imgBlob => {
-        if (!imgBlob) return;
+      const imgBlob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
+      if (imgBlob) {
         const imgUrl = URL.createObjectURL(imgBlob);
         const imgA = document.createElement('a');
         imgA.href = imgUrl;
         imgA.download = `builder_chart_${dateStr}.png`;
         imgA.click();
         URL.revokeObjectURL(imgUrl);
-      }, 'image/png');
+      }
     }
   }, [cards, spotPrice, priceRange]);
 

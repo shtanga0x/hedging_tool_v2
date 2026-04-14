@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import html2canvas from 'html2canvas';
+import { toBlob as elementToBlob } from 'html-to-image';
 import {
   Box,
   Paper,
@@ -354,16 +354,15 @@ export function BacktesterTab() {
     URL.revokeObjectURL(jsonUrl);
 
     if (chartRef.current) {
-      const canvas = await html2canvas(chartRef.current, { useCORS: true, scale: 2 });
-      canvas.toBlob(blob => {
-        if (!blob) return;
+      const blob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
+      if (blob) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = `backtest_chart_${dateStr}.png`;
         a.click();
         URL.revokeObjectURL(url);
-      }, 'image/png');
+      }
     }
   }, [positions]);
 

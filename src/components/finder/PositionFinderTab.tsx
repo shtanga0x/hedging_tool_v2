@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
-import html2canvas from 'html2canvas';
+import { toBlob as elementToBlob } from 'html-to-image';
 import {
   Box,
   Paper,
@@ -236,16 +236,15 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     URL.revokeObjectURL(jsonUrl);
 
     if (chartRef.current) {
-      const canvas = await html2canvas(chartRef.current, { useCORS: true, scale: 2 });
-      canvas.toBlob(imgBlob => {
-        if (!imgBlob) return;
+      const imgBlob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
+      if (imgBlob) {
         const imgUrl = URL.createObjectURL(imgBlob);
         const imgA = document.createElement('a');
         imgA.href = imgUrl;
         imgA.download = `finder_${label}_chart_${dateStr}.png`;
         imgA.click();
         URL.revokeObjectURL(imgUrl);
-      }, 'image/png');
+      }
     }
   }, [polyEvent, polyMarkets, crypto, optionType, bybitQty, selectedResult, selectedMatch]);
 
