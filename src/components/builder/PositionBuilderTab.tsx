@@ -16,6 +16,7 @@ import Add from '@mui/icons-material/Add';
 import SaveAlt from '@mui/icons-material/SaveAlt';
 import Upload from '@mui/icons-material/Upload';
 import Refresh from '@mui/icons-material/Refresh';
+import SwapHoriz from '@mui/icons-material/SwapHoriz';
 import type {
   PositionCard,
   PositionKind,
@@ -26,6 +27,8 @@ import type {
   BybitPosition,
   CryptoOption,
   OptionType,
+  BybitSide,
+  Side,
   BybitOptionChain as BybitChainType,
   BuilderTransferPayload,
 } from '../../types';
@@ -264,6 +267,43 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
 
   const handleRemoveCard = useCallback((id: string) => {
     setCards(prev => prev.filter(c => c.id !== id));
+  }, []);
+
+  const handleInverse = useCallback(() => {
+    setCards(prev => prev.map(card => {
+      if (card.kind === 'polymarket') {
+        const data = card.data as PolymarketCardData;
+        return {
+          ...card,
+          data: {
+            ...data,
+            selections: data.selections.map(s => ({
+              ...s,
+              side: (s.side === 'YES' ? 'NO' : 'YES') as Side,
+              entryPrice: Math.max(0, Math.min(1, 1 - s.entryPrice)),
+            })),
+          },
+        };
+      }
+      if (card.kind === 'options') {
+        const data = card.data as OptionsCardData;
+        return {
+          ...card,
+          data: {
+            ...data,
+            selectedOptions: data.selectedOptions.map(o => ({
+              ...o,
+              side: (o.side === 'buy' ? 'sell' : 'buy') as BybitSide,
+            })),
+          },
+        };
+      }
+      if (card.kind === 'futures') {
+        const data = card.data as FuturesCardData;
+        return { ...card, data: { ...data, size: -data.size } };
+      }
+      return card;
+    }));
   }, []);
 
   const handleMinimizeCard = useCallback((id: string) => {
@@ -905,7 +945,17 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
 
           <Divider sx={{ mb: 1.5 }} />
 
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SwapHoriz />}
+              onClick={handleInverse}
+              color="secondary"
+              title="Flip all positions: YES↔NO for Polymarket, buy↔sell for options, long↔short for futures"
+            >
+              Inverse
+            </Button>
             <Typography variant="body2" color="text.secondary">
               Total positions: <strong>{polyPositions.length + bybitPositions.length + futuresPositions.length}</strong>
             </Typography>

@@ -15,10 +15,10 @@ import Add from '@mui/icons-material/Add';
 import SaveAlt from '@mui/icons-material/SaveAlt';
 import Upload from '@mui/icons-material/Upload';
 import Refresh from '@mui/icons-material/Refresh';
+import SwapHoriz from '@mui/icons-material/SwapHoriz';
 import type {
   BacktestPosition,
   CryptoOption,
-  FuturesCardData,
 } from '../../types';
 import { BacktestChart } from './BacktestChart';
 import { BacktestAddDialog } from './BacktestAddDialog';
@@ -28,7 +28,6 @@ import { BacktestFuturesCard } from './BacktestFuturesCard';
 import { fetchPriceHistory, formatPolyExpiry } from '../../api/polymarket';
 import { fetchDeribitCandles, fetchDeribitStrikes, resolveDeribitInstrument, fetchDeribitVolIndex, fetchDeribitTradesAsCandles } from '../../api/deribit';
 import { parseBybitSymbol } from '../../api/bybit';
-import { fetchBybitLibraryMidprice } from '../../api/bybit_library';
 import { bsPrice, bsImpliedVol, polyFeePerShare } from '../../pricing/engine';
 import { fetchCryptoCandles, fetchCryptoPriceHistory } from '../../api/binance';
 import type { OHLCCandle } from '../../api/binance';
@@ -190,6 +189,26 @@ export function BacktesterTab() {
   // Update a single position (for option/futures cards)
   const updatePosition = useCallback((id: string, patch: Partial<BacktestPosition>) => {
     setPositions(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p));
+  }, []);
+
+  const handleInverse = useCallback(() => {
+    setPositions(prev => prev.map(pos => {
+      if (pos.kind === 'polymarket') {
+        return {
+          ...pos,
+          polySide: pos.polySide === 'YES' ? 'NO' : 'YES',
+          quantity: pos.quantity != null ? -pos.quantity : pos.quantity,
+        };
+      }
+      if (pos.kind === 'deribit') {
+        return { ...pos, quantity: pos.quantity != null ? -pos.quantity : -1 };
+      }
+      if (pos.kind === 'futures') {
+        return { ...pos, futuresSize: pos.futuresSize != null ? -pos.futuresSize : -1 };
+      }
+      return pos;
+    }));
+    setResults([]); // clear stale chart so user re-runs with new directions
   }, []);
 
   // Update all positions for a polymarket card group
@@ -398,7 +417,6 @@ export function BacktesterTab() {
                 label: `${(card.data?.size ?? 0) >= 0 ? 'Long' : 'Short'} ${asset} futures`,
                 color: colorFor(idx++), futuresSymbol: asset,
                 futuresSize: card.data?.size ?? 0,
-                futuresLeverage: (card.data as FuturesCardData)?.leverage ?? 5,
                 entryTimestamp: 0, entryPrice: card.data?.entryPrice ?? 0,
               });
             }
@@ -524,11 +542,7 @@ export function BacktesterTab() {
 
       for (const pos of positions) {
         if (pos.kind === 'polymarket' && pos.tokenId) {
-          // Auto-select fidelity so we get ~800 data points for the requested range.
-          // Polymarket API fidelity = minutes per data point (1 = 1-min, 60 = 1-hour).
-          const rangeMins = Math.ceil((endTs - startTs) / 60);
-          const fidelity = Math.max(1, Math.ceil(rangeMins / 800));
-          const histData = await fetchPriceHistory(pos.tokenId, String(startTs), fidelity);
+          const histData = await fetchPriceHistory(pos.tokenId, '1', 10);
           const rawHistory = (histData.history ?? []).filter(pt => pt.t >= startTs && pt.t <= endTs);
           // Skip leading zeros — Polymarket returns price 0 for timestamps before the market existed
           const firstNonZeroIdx = rawHistory.findIndex(pt => pt.p > 0);
@@ -540,8 +554,6 @@ export function BacktesterTab() {
           // Use first visible (non-zero) point as baseline so the line starts at $0 on the graph
           const entryPrice = history[0].p;
           const qty = pos.quantity ?? 100;
-          // Taker fee (mid/ask entry): deducted as one-time cost at open.
-          // Bid (maker/limit) entry: 0 fee (maker rebate, treated as no cost).
           const fee = (pos.polyPriceMode ?? 'ask') !== 'bid'
             ? polyFeePerShare(entryPrice) * Math.abs(qty)
             : 0;
@@ -553,8 +565,8 @@ export function BacktesterTab() {
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');
-          const sources = ['deribit', 'bybit', 'bybit-bs'] as const;
-          const sourceLabels: Record<string, string> = { deribit: 'Deribit', bybit: 'Bybit', 'bybit-bs': 'BS' };
+          const sources = ['deribit', 'bybit-bs'] as const;
+          const sourceLabels: Record<string, string> = { deribit: 'Deribit', 'bybit-bs': 'BS' };
           const qty = pos.quantity ?? 0.01;
           // Caches Deribit raw candles (BTC-denominated) so Bybit BS can reuse them
           // without a second API call — populated in the 'deribit' source block below.
@@ -700,52 +712,6 @@ export function BacktesterTab() {
                 newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
               }
 
-            } else if (source === 'bybit') {
-              // Bybit: real midprice data from the local Parquet library (api_server.py).
-              // Instrument name format: BTC-10APR26-67500-C  (our library uses same convention)
-              const nm = baseName.match(/^(BTC|ETH)-(\d{1,2}[A-Z]{3}\d{2})-(\d+)-([CP])$/);
-              if (!nm) {
-                localWarnings.push(`Bybit library: cannot parse instrument name "${baseName}". Expected BTC-10APR26-67500-C.`);
-                newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
-              } else {
-                const libExpiry     = nm[2];                              // e.g. "10APR26"
-                const libStrike     = parseInt(nm[3]);                    // e.g. 67500
-                const libOptionType = nm[4] as 'C' | 'P';
-                const dateFrom      = formatDate(startTs);
-                const dateTo        = formatDate(endTs);
-                try {
-                  const candles = await fetchBybitLibraryMidprice(
-                    libExpiry, libStrike, libOptionType, dateFrom, dateTo, '1h'
-                  );
-                  if (candles.length === 0) {
-                    localWarnings.push(
-                      `Bybit library: no data for ${baseName} between ${dateFrom} and ${dateTo}. ` +
-                      `Add the date to the library via the options data tool.`
-                    );
-                    newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
-                  } else {
-                    const entryPrice = candles[0].close;
-                    newResults.push({
-                      position: syntheticPos,
-                      entryValue: entryPrice * Math.abs(qty),
-                      source,
-                      pnlSeries: candles.map(c => ({
-                        timestamp: Math.floor(c.timestamp / 1000),
-                        pnl: (c.close - entryPrice) * qty,
-                      })),
-                    });
-                  }
-                } catch (e) {
-                  const msg = e instanceof Error ? e.message : String(e);
-                  if (msg.includes('not reachable')) {
-                    localWarnings.push(`Bybit library: server not running — start with: python btc-options-lib/api_server.py`);
-                  } else {
-                    localWarnings.push(`Bybit library: ${msg}`);
-                  }
-                  newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
-                }
-              }
-
             } else if (source === 'bybit-bs') {
               // Bybit BS: BS reconstruction with strike-specific time-varying IV.
               // Priority: (1) IV derived from Deribit mark prices via bsImpliedVol,
@@ -851,15 +817,12 @@ export function BacktesterTab() {
             newResults.push({ position: pos, pnlSeries: [], entryValue: 0 });
             continue;
           }
-          const entryPrice = pos.entryPrice > 0 ? pos.entryPrice : spotPts[0].p;
-          const leverage = pos.futuresLeverage ?? 5;
-          const notional = entryPrice * Math.abs(pos.futuresSize!);
-          const margin = notional / leverage;
+          const entryPrice = spotPts[0].p;
           const pnlSeries: PnlPoint[] = spotPts.map(pt => ({
             timestamp: pt.t,
             pnl: (pt.p - entryPrice) * pos.futuresSize!,
           }));
-          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: margin });
+          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: entryPrice * Math.abs(pos.futuresSize!) });
         }
       }
 
@@ -990,6 +953,22 @@ export function BacktesterTab() {
           })
         )}
       </Box>
+
+      {/* Inverse button */}
+      {positions.length > 0 && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<SwapHoriz />}
+            onClick={handleInverse}
+            color="secondary"
+            title="Flip all positions: YES↔NO for Polymarket, buy↔sell for options, long↔short for futures"
+          >
+            Inverse
+          </Button>
+        </Box>
+      )}
 
       {/* Controls bar */}
       <Paper sx={{ p: 2, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
