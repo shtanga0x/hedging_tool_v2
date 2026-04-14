@@ -660,8 +660,11 @@ export function BacktestChart({
               const normalizedValue = value - baseline;
               const info = entryInfoMap[dataKey];
               const entryVal = Math.abs(info?.entryValue ?? 0);
-              const pct = entryVal > 0
-                ? `${normalizedValue >= 0 ? '+' : ''}${((normalizedValue / entryVal) * 100).toFixed(2)}%`
+              // Denominator: position value at first visible point (entryVal + baseline)
+              // This ensures max loss from first visible = -100% (not > 100%)
+              const visibleEntryVal = Math.abs(entryVal + baseline);
+              const pct = visibleEntryVal > 0.001
+                ? `${normalizedValue >= 0 ? '+' : ''}${((normalizedValue / visibleEntryVal) * 100).toFixed(2)}%`
                 : null;
               const label = dataKey === 'portfolio' ? 'Total PnL' : name;
               const sign = normalizedValue >= 0 ? '+' : '';
