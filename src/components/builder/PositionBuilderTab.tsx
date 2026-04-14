@@ -55,14 +55,12 @@ function detectCryptoFromSymbol(symbol: string): CryptoOption | null {
   return null;
 }
 
-function roundTo3Zeros(value: number, direction: 'down' | 'up'): number {
+function roundToNice(value: number, direction: 'down' | 'up'): number {
   if (value <= 0) return 0;
-  const magnitude = Math.pow(10, Math.max(0, Math.floor(Math.log10(value)) - 1));
-  const rounded = magnitude >= 1000 ? Math.round(magnitude / 1000) * 1000 : magnitude;
-  const unit = Math.max(rounded, 1000);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)) - 1);
   return direction === 'down'
-    ? Math.floor(value / unit) * unit
-    : Math.ceil(value / unit) * unit;
+    ? Math.floor(value / magnitude) * magnitude
+    : Math.ceil(value / magnitude) * magnitude;
 }
 
 function getEarliestMarketExpiry(data: PolymarketCardData): number {
@@ -167,7 +165,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         if (price > 0) {
           setSpotPrice(price);
           if (priceRange[0] === 60000 && priceRange[1] === 120000) {
-            setPriceRange([roundTo3Zeros(price * 0.6, 'down'), roundTo3Zeros(price * 1.4, 'up')]);
+            setPriceRange([roundToNice(price * 0.6, 'down'), roundToNice(price * 1.4, 'up')]);
           }
         }
       })
@@ -658,14 +656,13 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
 
   const sliderBounds: [number, number] = useMemo(() => {
     if (spotPrice <= 0) return [30000, 200000];
-    return [roundTo3Zeros(spotPrice * 0.2, 'down'), roundTo3Zeros(spotPrice * 2.0, 'up')];
+    return [roundToNice(spotPrice * 0.2, 'down'), roundToNice(spotPrice * 2.0, 'up')];
   }, [spotPrice]);
 
   const sliderStep = useMemo(() => {
     const range = sliderBounds[1] - sliderBounds[0];
-    if (range > 100000) return 1000;
-    if (range > 10000) return 100;
-    return 10;
+    if (range <= 0) return 1;
+    return Math.pow(10, Math.floor(Math.log10(range)) - 1);
   }, [sliderBounds]);
 
   const hasPositions = polyPositions.length > 0 || bybitPositions.length > 0 || futuresPositions.length > 0;
