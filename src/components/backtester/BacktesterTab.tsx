@@ -488,7 +488,9 @@ export function BacktesterTab() {
   const handleRunBacktest = useCallback(async () => {
     if (positions.length === 0) return;
     const startTs = startDate ? parseDate(startDate) : Math.floor(Date.now() / 1000) - 90 * 86400;
-    const endTs = endDate ? parseDate(endDate) : Math.floor(Date.now() / 1000);
+    const endTs = endDate
+      ? Math.min(parseDate(endDate) + 86399, Math.floor(Date.now() / 1000))
+      : Math.floor(Date.now() / 1000);
 
     setRunning(true);
     setError(null);
@@ -872,7 +874,9 @@ export function BacktesterTab() {
 
   const timeRange = useMemo(() => {
     const startTs = startDate ? parseDate(startDate) : Math.floor(Date.now() / 1000) - 90 * 86400;
-    const endTs = endDate ? parseDate(endDate) : Math.floor(Date.now() / 1000);
+    const endTs = endDate
+      ? Math.min(parseDate(endDate) + 86399, Math.floor(Date.now() / 1000))
+      : Math.floor(Date.now() / 1000);
     return { startTs, endTs };
   }, [startDate, endDate]);
 
