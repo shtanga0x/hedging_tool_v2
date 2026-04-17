@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { toBlob as elementToBlob } from 'html-to-image';
 import {
   Box,
@@ -34,6 +34,7 @@ import { BybitOptionChain } from '../shared/BybitOptionChain';
 import { FinderTable, VizCard } from './FinderResults';
 import { runOptimization } from '../../optimization/optimizer';
 import { fetchCurrentPrice } from '../../api/binance';
+import { fetchEventBySlug, parseMarkets } from '../../api/polymarket';
 import { type SmilePoint } from '../../pricing/engine';
 
 interface PositionFinderTabProps {
@@ -55,10 +56,22 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   const [selectedMatch, setSelectedMatch] = useState<OptMatchResult | null>(null);
   const [loadedExpiry, setLoadedExpiry] = useState<number | undefined>(undefined);
 
+  const [chainRefreshToken, setChainRefreshToken] = useState(0);
+
   const chartRef = useRef<HTMLDivElement>(null);
   const chartSectionRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // Refs to hold latest values for use inside stable callbacks (avoids stale closures)
+  const pendingAutoRunRef = useRef(false);
+  const latestPolyMarketsRef = useRef<ParsedMarket[]>([]);
+  const latestSpotRef = useRef(0);
+  const latestOptionTypeRef = useRef<OptionType>('above');
+
+  useEffect(() => { latestPolyMarketsRef.current = polyMarkets; }, [polyMarkets]);
+  useEffect(() => { latestSpotRef.current = spotPrice; }, [spotPrice]);
+  useEffect(() => { latestOptionTypeRef.current = optionType; }, [optionType]);
 
   const smile = useMemo((): SmilePoint[] => {
     if (spotPrice <= 0) return [];
@@ -78,8 +91,10 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   ) => {
     setPolyEvent(event);
     setPolyMarkets(markets);
+    latestPolyMarketsRef.current = markets;
     setCrypto(detectedCrypto);
     setOptionType(detectedOptionType);
+    latestOptionTypeRef.current = detectedOptionType;
     setResults([]);
     setSelectedResult(null);
     setSelectedMatch(null);
@@ -87,21 +102,42 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     if (detectedCrypto) {
       try {
         const price = await fetchCurrentPrice(detectedCrypto);
-        if (price > 0) setSpotPrice(price);
+        if (price > 0) {
+          setSpotPrice(price);
+          latestSpotRef.current = price;
+        }
       } catch { /* ignore */ }
     }
   }, []);
 
   const handleChainSelected = useCallback((chain: BybitChainType | null) => {
     setBybitChain(chain);
-    setResults([]);
     setSelectedResult(null);
     setSelectedMatch(null);
+
+    if (pendingAutoRunRef.current && chain && latestPolyMarketsRef.current.length > 0 && latestSpotRef.current > 0) {
+      pendingAutoRunRef.current = false;
+      const ts = Math.floor(Date.now() / 1000);
+      try {
+        const r = runOptimization(latestPolyMarketsRef.current, latestOptionTypeRef.current, latestSpotRef.current, ts, chain, 0.01);
+        setResults(r);
+        setLoading(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Optimization failed');
+        setResults([]);
+        setLoading(false);
+      }
+    } else {
+      setResults([]);
+    }
   }, []);
 
   const handleSpotLoaded = useCallback((price: number) => {
-    if (price > 0 && spotPrice <= 0) setSpotPrice(price);
-  }, [spotPrice]);
+    if (price > 0) {
+      setSpotPrice(price);
+      latestSpotRef.current = price;
+    }
+  }, []);
 
   const handleRun = useCallback(async () => {
     if (!bybitChain || polyMarkets.length === 0 || spotPrice <= 0) return;
@@ -118,6 +154,47 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
       setLoading(false);
     }
   }, [bybitChain, polyMarkets, optionType, spotPrice, nowSec]);
+
+  // Refresh: re-fetch polymarket prices + bitcoin price, then re-fetch Bybit chain,
+  // then auto-run optimization with all fresh data.
+  const handleRefresh = useCallback(async () => {
+    if (polyMarkets.length === 0) return;
+    setLoading(true);
+    setError(null);
+
+    const fetches: Promise<void>[] = [];
+
+    if (polyEvent?.slug) {
+      fetches.push(
+        fetchEventBySlug(polyEvent.slug)
+          .then(freshEvent => {
+            const freshMarkets = parseMarkets(freshEvent.markets);
+            latestPolyMarketsRef.current = freshMarkets;
+            setPolyMarkets(freshMarkets);
+          })
+          .catch(() => {})
+      );
+    }
+
+    if (crypto) {
+      fetches.push(
+        fetchCurrentPrice(crypto)
+          .then(price => {
+            if (price > 0) {
+              latestSpotRef.current = price;
+              setSpotPrice(price);
+            }
+          })
+          .catch(() => {})
+      );
+    }
+
+    // Wait for polymarket + bitcoin before triggering chain refresh
+    await Promise.all(fetches);
+    pendingAutoRunRef.current = true;
+    setChainRefreshToken(t => t + 1);
+    // Loading is cleared inside handleChainSelected once optimization completes
+  }, [polyMarkets.length, polyEvent, crypto]);
 
   const handleSelectRow = useCallback((result: StrikeOptResult, match: OptMatchResult) => {
     setSelectedResult(result);
@@ -153,8 +230,10 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
 
         setPolyEvent(event);
         setPolyMarkets(markets ?? []);
+        latestPolyMarketsRef.current = markets ?? [];
         setCrypto(loadedCrypto ?? null);
         setOptionType(loadedOptionType ?? 'above');
+        latestOptionTypeRef.current = loadedOptionType ?? 'above';
         if (expiry) setLoadedExpiry(expiry);
         setResults([]);
         setSelectedResult(null);
@@ -162,7 +241,12 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
 
         if (loadedCrypto) {
           fetchCurrentPrice(loadedCrypto as CryptoOption)
-            .then(price => { if (price > 0) setSpotPrice(price); })
+            .then(price => {
+              if (price > 0) {
+                setSpotPrice(price);
+                latestSpotRef.current = price;
+              }
+            })
             .catch(() => {});
         }
       } catch {
@@ -315,7 +399,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
       {/* Top toolbar: Refresh / Load / Save */}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
         <input ref={uploadRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleLoad} />
-        <Button size="small" variant="outlined" startIcon={loading ? <CircularProgress size={14} /> : <Refresh />} onClick={handleRun} disabled={!canRun || loading}>
+        <Button size="small" variant="outlined" startIcon={loading ? <CircularProgress size={14} /> : <Refresh />} onClick={handleRefresh} disabled={!canRun || loading}>
           Refresh
         </Button>
         <Button size="small" variant="outlined" startIcon={<Upload />} onClick={() => uploadRef.current?.click()}>
@@ -384,7 +468,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
               <InfoOutlined sx={{ fontSize: 16, color: 'text.secondary', cursor: 'help' }} />
             </Tooltip>
           </Box>
-          <BybitOptionChain onChainSelected={handleChainSelected} onSpotPriceLoaded={handleSpotLoaded} requestedExpiry={loadedExpiry} />
+          <BybitOptionChain onChainSelected={handleChainSelected} onSpotPriceLoaded={handleSpotLoaded} requestedExpiry={loadedExpiry} refreshToken={chainRefreshToken} />
           <TextField
             label="Option size (BTC)"
             size="small"

@@ -14,15 +14,16 @@ interface BybitOptionChainProps {
   onChainSelected: (chain: BybitChainType | null) => void;
   onSpotPriceLoaded: (price: number) => void;
   requestedExpiry?: number;
+  refreshToken?: number;
 }
 
-export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requestedExpiry }: BybitOptionChainProps) {
+export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requestedExpiry, refreshToken }: BybitOptionChainProps) {
   const [chains, setChains] = useState<BybitChainType[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<number | ''>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch instruments + tickers on mount
+  // Fetch instruments + tickers on mount and when refreshToken changes
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -44,7 +45,7 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
       }
     })();
     return () => { cancelled = true; };
-  }, [onSpotPriceLoaded]);
+  }, [onSpotPriceLoaded, refreshToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeChain = useMemo(() => {
     if (selectedExpiry === '') return null;

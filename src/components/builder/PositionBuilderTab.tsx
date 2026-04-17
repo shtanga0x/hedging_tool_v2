@@ -125,6 +125,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const [bybitChain, setBybitChain] = useState<BybitChainType | null>(null);
   const [priceRange, setPriceRange] = useState<[number, number]>([60000, 120000]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const nowSec = Math.floor(Date.now() / 1000);
   const primaryPolyCardData = useMemo<PolymarketCardData | null>(() => {
     let best: PolymarketCardData | null = null;
@@ -170,7 +171,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     ? new Date(groupExpiryTs * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : null;
 
-  // Load spot price when crypto is detected
+  // Load spot price when crypto is detected or on refresh
   useEffect(() => {
     if (!primaryCrypto) return;
     fetchCurrentPrice(primaryCrypto)
@@ -183,7 +184,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         }
       })
       .catch(() => {});
-  }, [primaryCrypto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [primaryCrypto, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle transfer payload from Position Finder
   useEffect(() => {
@@ -356,7 +357,6 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     });
   }, [bybitChain]);
 
-  const [reloadKey, setReloadKey] = useState(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -575,7 +575,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     for (const card of polyCards) {
       const d = card.data as PolymarketCardData;
       for (const market of d.markets) {
-        if (market.strikePrice <= 0 || market.currentPrice <= 0 || market.currentPrice >= 1) continue;
+        if (market.strikePrice <= 0 || market.currentPrice <= 0 || market.currentPrice >= 0.999) continue;
         const tauPoly = Math.max((market.endDate - nowSec) / (365.25 * 24 * 3600), 0);
         if (tauPoly <= 0) continue;
         const isUpBarrier = market.strikePrice > spotPrice;
