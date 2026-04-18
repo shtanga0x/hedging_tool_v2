@@ -333,9 +333,9 @@ export function BacktestChart({
         : (r.position.quantity ?? 0.01);
       const entryValue = normalizedEntryValues[r.position.id] ?? r.entryValue;
       m[r.position.id] = { entryValue, qty, fee: r.entryFee };
-      if (r.source !== 'deribit') total += r.entryValue; // use real entryValue for totals
+      if (r.source === 'bybit-bs' || !r.source) total += r.entryValue;
       if (r.position.kind === 'polymarket') polyTotal += r.entryValue;
-      else if (r.source !== 'deribit') optTotal += r.entryValue;
+      else if (r.source === 'bybit-bs') optTotal += r.entryValue;
     }
     m['polymarket_total'] = { entryValue: polyTotal, qty: 1 };
     m['options_total']    = { entryValue: optTotal,  qty: 1 };
@@ -508,10 +508,10 @@ export function BacktestChart({
       for (const r of visibleResults) {
         const pnl = (findLastBefore(r.pnlSeries, ts) ?? 0) + (endAlignOffsets[r.position.id] ?? 0);
         row[r.position.id] = pnl;
-        // Deribit curves are display-only; BS is the canonical option curve for Total PnL
-        if (r.source !== 'deribit') portfolio += pnl;
+        // Only bybit-bs counts toward totals — Deribit and Bybit are display-only comparisons
+        if (r.source === 'bybit-bs' || !r.source) portfolio += pnl;
         if (r.position.kind === 'polymarket') polyTotal += pnl;
-        else if (r.source !== 'deribit') optTotal += pnl;
+        else if (r.source === 'bybit-bs') optTotal += pnl;
       }
       row['portfolio']        = portfolio;
       row['polymarket_total'] = polyTotal;
