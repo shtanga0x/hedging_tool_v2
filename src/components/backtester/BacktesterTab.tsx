@@ -88,13 +88,13 @@ function parseInstrumentFields(name: string): { optStrike: number; optExpiryMs: 
   };
 }
 
-/** Choose a resample frequency for the Bybit library based on backtest length. */
+/** Choose a resample frequency for the Bybit library based on backtest length.
+ *  Never goes coarser than 1h — daily resampling loses too much price action. */
 function pickLibraryResample(startTs: number, endTs: number): string {
   const days = (endTs - startTs) / 86400;
-  if (days <= 3)  return '15min';
-  if (days <= 14) return '1h';
-  if (days <= 60) return '4h';
-  return '1D';
+  if (days <= 1) return '5min';
+  if (days <= 7) return '15min';
+  return '1h';
 }
 
 /** Parse a Bybit/Deribit instrument name → library query params. */
@@ -596,10 +596,14 @@ export function BacktesterTab() {
 
           // Start library fetch immediately so it runs in parallel with Deribit processing
           const libParams = parseToLibraryParams(baseName);
+          // Always pass the computed date range (not raw strings) so we never
+          // fetch data outside the backtest window or pull all history when startDate is empty.
+          const libDateFrom = new Date(startTs * 1000).toISOString().slice(0, 10);
+          const libDateTo   = new Date(endTs   * 1000).toISOString().slice(0, 10);
           const libraryPromise: Promise<LibraryCandle[]> = libParams
             ? fetchBybitLibraryMidprice(
                 libParams.expiry, libParams.strike, libParams.optType,
-                startDate || undefined, endDate || undefined, resample,
+                libDateFrom, libDateTo, resample,
               ).catch(() => [])
             : Promise.resolve([]);
 
