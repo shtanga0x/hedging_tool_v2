@@ -28,6 +28,8 @@ import { BacktestFuturesCard } from './BacktestFuturesCard';
 import { fetchPriceHistory, formatPolyExpiry } from '../../api/polymarket';
 import { fetchDeribitCandles, fetchDeribitStrikes, resolveDeribitInstrument, fetchDeribitVolIndex, fetchDeribitTradesAsCandles } from '../../api/deribit';
 import { parseBybitSymbol } from '../../api/bybit';
+import { fetchBybitLibraryMidprice } from '../../api/bybit_library';
+import type { LibraryCandle } from '../../api/bybit_library';
 import { bsPrice, bsImpliedVol, polyFeePerShare } from '../../pricing/engine';
 import { fetchCryptoCandles, fetchCryptoPriceHistory } from '../../api/binance';
 import type { OHLCCandle } from '../../api/binance';
@@ -86,6 +88,22 @@ function parseInstrumentFields(name: string): { optStrike: number; optExpiryMs: 
   };
 }
 
+/** Choose a resample frequency for the Bybit library based on backtest length. */
+function pickLibraryResample(startTs: number, endTs: number): string {
+  const days = (endTs - startTs) / 86400;
+  if (days <= 3)  return '15min';
+  if (days <= 14) return '1h';
+  if (days <= 60) return '4h';
+  return '1D';
+}
+
+/** Parse a Bybit/Deribit instrument name → library query params. */
+function parseToLibraryParams(name: string): { expiry: string; strike: number; optType: 'C' | 'P' } | null {
+  const m = name.replace(/-USDT$/, '').match(/^(?:BTC|ETH)-(\d{1,2}[A-Z]{3}\d{2})-(\d+)-([CP])$/);
+  if (!m) return null;
+  return { expiry: m[1], strike: parseInt(m[2]), optType: m[3] as 'C' | 'P' };
+}
+
 type AddKind = 'polymarket' | 'deribit' | 'futures';
 
 // A card group: polymarket cards can have multiple positions per card, others are 1:1
@@ -117,7 +135,6 @@ export function BacktesterTab() {
 
   const uploadRef = useRef<HTMLInputElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
-
   // Fetch crypto candles whenever overlay selection, interval, or results change
   useEffect(() => {
     if (!cryptoOverlay || results.length === 0) {
@@ -521,6 +538,7 @@ export function BacktesterTab() {
     try {
       const newResults: BacktestResult[] = [];
       const localWarnings: string[] = [];
+      const resample = pickLibraryResample(startTs, endTs);
 
       // Pre-fetch Binance spot data for futures
       const futuresSymbols = [...new Set(
@@ -569,12 +587,21 @@ export function BacktesterTab() {
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');
-          const sources = ['deribit', 'bybit-bs'] as const;
-          const sourceLabels: Record<string, string> = { deribit: 'Deribit', 'bybit-bs': 'BS' };
+          const sources = ['deribit', 'bybit', 'bybit-bs'] as const;
+          const sourceLabels: Record<string, string> = { deribit: 'Deribit', bybit: 'Bybit', 'bybit-bs': 'BS' };
           const qty = pos.quantity ?? 0.01;
           // Caches Deribit raw candles (BTC-denominated) so Bybit BS can reuse them
           // without a second API call — populated in the 'deribit' source block below.
           let cachedDeribitCandles: { timestamp: number; close: number }[] = [];
+
+          // Start library fetch immediately so it runs in parallel with Deribit processing
+          const libParams = parseToLibraryParams(baseName);
+          const libraryPromise: Promise<LibraryCandle[]> = libParams
+            ? fetchBybitLibraryMidprice(
+                libParams.expiry, libParams.strike, libParams.optType,
+                startDate || undefined, endDate || undefined, resample,
+              ).catch(() => [])
+            : Promise.resolve([]);
 
           for (const source of sources) {
             const resultId = `${pos.id}_${source}`;
@@ -715,6 +742,24 @@ export function BacktesterTab() {
                 localWarnings.push(`Deribit: no mark-price or trade history for ${resolvedName} in this date range (typical for illiquid/short-dated options). BS reconstruction (purple dashed line) is shown instead.`);
                 newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
               }
+
+            } else if (source === 'bybit') {
+              // Real Bybit midprice history from local btc-options-lib Parquet library.
+              // Prices are already in USDT — no BTC/USD conversion needed.
+              const libCandles = await libraryPromise;
+              if (libCandles.length === 0) continue;
+
+              const entryPrice = libCandles[0].close;
+              newResults.push({
+                position: syntheticPos,
+                pnlSeries: libCandles.map(c => ({
+                  timestamp: Math.floor(c.timestamp / 1000),
+                  pnl: (c.close - entryPrice) * qty,
+                })),
+                entryPrice,
+                entryValue: entryPrice * Math.abs(qty),
+                source: 'bybit',
+              });
 
             } else if (source === 'bybit-bs') {
               // Bybit BS: BS reconstruction with strike-specific time-varying IV.

@@ -10,6 +10,10 @@
 
 const BASE = import.meta.env.DEV ? 'http://127.0.0.1:8765' : 'https://api.shtanga.xyz';
 
+// In-memory cache — avoids re-fetching the same series during a single session
+const _cache = new Map<string, { data: LibraryCandle[]; expiresAt: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export interface LibraryCandle {
   timestamp: number;  // Unix milliseconds
   close: number;      // midprice in USDT
@@ -40,6 +44,10 @@ export async function fetchBybitLibraryMidprice(
   dateTo?: string,
   resample?: string,
 ): Promise<LibraryCandle[]> {
+  const cacheKey = `${expiry}|${strike}|${optionType}|${dateFrom ?? ''}|${dateTo ?? ''}|${resample ?? ''}`;
+  const hit = _cache.get(cacheKey);
+  if (hit && Date.now() < hit.expiresAt) return hit.data;
+
   const params = new URLSearchParams({
     expiry,
     strike: String(strike),
@@ -68,7 +76,9 @@ export async function fetchBybitLibraryMidprice(
     midprices: number[];
   };
 
-  return timestamps.map((ts, i) => ({ timestamp: ts, close: midprices[i] }));
+  const result = timestamps.map((ts, i) => ({ timestamp: ts, close: midprices[i] }));
+  _cache.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_TTL });
+  return result;
 }
 
 /** Fetch the full catalog of available (date, expiry, strike, option_type) combinations. */

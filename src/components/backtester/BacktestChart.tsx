@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTheme } from '@mui/material/styles';
-import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip, Slider } from '@mui/material';
+import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip, Slider, Typography } from '@mui/material';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import ZoomIn from '@mui/icons-material/ZoomIn';
 import ZoomOut from '@mui/icons-material/ZoomOut';
@@ -574,8 +574,6 @@ export function BacktestChart({
   const formatDate = (ts: number) =>
     new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-  if (chartData.length === 0) return null;
-
   const visiblePositionLines = grouped ? [] : visibleResults.filter(r => !hiddenLines.has(r.position.id));
 
   // Per-type thickness cycling (mirrors legend)
@@ -645,6 +643,13 @@ export function BacktestChart({
           Move to zero
         </button>
       </Box>
+      {chartData.length === 0 ? (
+        <Box sx={{ height: 440, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography variant="body2" color="text.secondary">
+            No data — enable a source above to display results
+          </Typography>
+        </Box>
+      ) : (<>
       <ResponsiveContainer width="100%" height={440}>
         <ComposedChart data={displayData} margin={{ top: 20, right: 20, bottom: 10, left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={isDark ? 'rgba(139,157,195,0.12)' : 'rgba(0,0,0,0.08)'} />
@@ -842,6 +847,7 @@ export function BacktestChart({
           {new Date(visibleEndTs * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
         </span>
       </Box>
+      </>)}
 
       {/* Controls */}
       <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1.5, px: 1 }}>
