@@ -659,16 +659,16 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     return positions;
   }, [cards, spotPrice]);
 
-  // Derive futures positions
+  // Derive futures positions — use spotPrice as fallback entry when not yet set
   const futuresPositions = useMemo((): FuturesPositionForCurve[] => {
     return cards
       .filter(c => c.kind === 'futures')
       .map(c => {
         const d = c.data as FuturesCardData;
-        return { entryPrice: d.entryPrice, size: d.size };
+        return { entryPrice: d.entryPrice || spotPrice, size: d.size };
       })
       .filter(fp => fp.entryPrice > 0 && fp.size !== 0);
-  }, [cards]);
+  }, [cards, spotPrice]);
 
   // Get primary poly expiry
   const polyExpiryTs = useMemo(() => {

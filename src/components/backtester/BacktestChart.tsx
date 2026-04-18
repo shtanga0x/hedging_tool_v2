@@ -244,8 +244,8 @@ export function BacktestChart({
 
   const [grouped, setGrouped]             = useState(false);
   const [hiddenLines, setHiddenLines]     = useState<Set<string>>(new Set());
-  // Deribit and BS are reference curves; Bybit library data is canonical for Total PnL
-  const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set(['deribit', 'bybit-bs']));
+  // Deribit is a reference curve (mark-price); BS reconstruction is shown by default
+  const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set(['deribit']));
   const [overlayAnchor, setOverlayAnchor] = useState<null | HTMLElement>(null);
   const [rightAxisZoom, setRightAxisZoom]     = useState(1.0);
   const [rightAxisOffset, setRightAxisOffset] = useState(0);
