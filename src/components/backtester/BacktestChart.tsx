@@ -601,6 +601,9 @@ export function BacktestChart({
     <Box>
       {/* Source filter + Smooth toggle */}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 1, mb: 0.5, pr: showCrypto ? '88px' : '24px', flexWrap: 'wrap' }}>
+        <Typography sx={{ marginRight: 'auto', pl: '28px', fontSize: 13, fontWeight: 500, color: legendColor }}>
+          PnL
+        </Typography>
         {availableSources.map(src => {
           const hidden = hiddenSources.has(src);
           return (
@@ -675,7 +678,6 @@ export function BacktestChart({
             yAxisId="left"
             tickFormatter={v => `$${(v as number).toFixed(2)}`}
             tick={{ fill: isDark ? '#8B9DC3' : '#5A6A85', fontSize: 12 }}
-            label={{ value: 'PnL', position: 'top', offset: 12, style: { fill: legendColor, fontSize: 13, textAnchor: 'middle' } }}
           />
           {showCrypto && cryptoPriceRange ? (
             <YAxis
