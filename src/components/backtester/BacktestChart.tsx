@@ -364,12 +364,23 @@ export function BacktestChart({
         });
       }
     }
-    items.push({ key: 'portfolio', label: 'Total PnL', color: portfolioColor, width: 2 });
     if (showCrypto && cryptoOverlay) {
       items.push({ key: cryptoOverlay, label: `${cryptoOverlay} Price`, color: cryptoColor, dash: '4 2', width: 1.5 });
     }
+    // Total PnL is always pinned to the end of legend and tooltip.
+    items.push({ key: 'portfolio', label: 'Total PnL', color: portfolioColor, width: 2 });
     return items;
   }, [grouped, visibleResults, hasPolymarket, hasOptions, showCrypto, cryptoOverlay, cryptoColor, portfolioColor, isDark]);
+
+  // Tooltip row order matches the legend, so Total PnL is always the last row.
+  const tooltipOrder = useMemo(() => {
+    const map: Record<string, number> = {};
+    legendItems.forEach((it, i) => { map[it.key] = i; });
+    // Anything not in the legend (e.g. anchor series with `__` keys) sorts before
+    // Total PnL so Total stays last regardless of incoming payload order.
+    map['portfolio'] = Number.MAX_SAFE_INTEGER;
+    return map;
+  }, [legendItems]);
 
   const handleGroupedChange = useCallback((_: unknown, val: boolean | null) => {
     if (val !== null) { setGrouped(val); setHiddenLines(new Set()); }
@@ -693,6 +704,10 @@ export function BacktestChart({
 
           <RechartsTooltip
             contentStyle={{ backgroundColor: tooltipBg, border: `1px solid ${tooltipBorder}`, borderRadius: 8 }}
+            itemSorter={(item) => {
+              const k = typeof item?.dataKey === 'string' ? item.dataKey : '';
+              return tooltipOrder[k] ?? 9999;
+            }}
             labelFormatter={ts =>
               new Date((ts as number) * 1000).toLocaleDateString('en-US', {
                 month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
