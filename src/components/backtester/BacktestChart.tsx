@@ -675,7 +675,7 @@ export function BacktestChart({
             yAxisId="left"
             tickFormatter={v => `$${(v as number).toFixed(2)}`}
             tick={{ fill: isDark ? '#8B9DC3' : '#5A6A85', fontSize: 12 }}
-            label={{ value: 'PnL', angle: -90, position: 'insideLeft', style: { fill: legendColor, fontSize: 15 } }}
+            label={{ value: 'PnL', position: 'top', offset: 12, style: { fill: legendColor, fontSize: 13, textAnchor: 'middle' } }}
           />
           {showCrypto && cryptoPriceRange ? (
             <YAxis
