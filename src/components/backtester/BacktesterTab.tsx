@@ -123,6 +123,11 @@ export function BacktesterTab() {
   // Backtest range
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState(formatDate(Math.floor(Date.now() / 1000)));
+  // Tracks whether the user has explicitly edited endDate. The initial value
+  // is "today at mount time", which goes stale if the tab stays open overnight;
+  // when the flag is false we transparently bump endDate to the real "today"
+  // before running so Refresh / Run Backtest fetch up to now instead of yesterday.
+  const [endDateUserSet, setEndDateUserSet] = useState(false);
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -526,10 +531,18 @@ export function BacktesterTab() {
 
   const handleRunBacktest = useCallback(async () => {
     if (positions.length === 0) return;
-    const startTs = startDate ? parseDate(startDate) : Math.floor(Date.now() / 1000) - 90 * 86400;
-    const endTs = endDate
-      ? Math.min(parseDate(endDate) + 86399, Math.floor(Date.now() / 1000))
-      : Math.floor(Date.now() / 1000);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const todayStr = formatDate(nowSec);
+    // Auto-bump a stale default endDate to today (handles tabs left open overnight).
+    let activeEndDate = endDate;
+    if (!endDateUserSet && endDate !== todayStr) {
+      activeEndDate = todayStr;
+      setEndDate(todayStr);
+    }
+    const startTs = startDate ? parseDate(startDate) : nowSec - 90 * 86400;
+    const endTs = activeEndDate
+      ? Math.min(parseDate(activeEndDate) + 86399, nowSec)
+      : nowSec;
 
     setRunning(true);
     setError(null);
@@ -886,15 +899,17 @@ export function BacktesterTab() {
     } finally {
       setRunning(false);
     }
-  }, [positions, startDate, endDate]);
+  }, [positions, startDate, endDate, endDateUserSet]);
 
   const timeRange = useMemo(() => {
-    const startTs = startDate ? parseDate(startDate) : Math.floor(Date.now() / 1000) - 90 * 86400;
-    const endTs = endDate
-      ? Math.min(parseDate(endDate) + 86399, Math.floor(Date.now() / 1000))
-      : Math.floor(Date.now() / 1000);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const effectiveEnd = endDateUserSet ? endDate : formatDate(nowSec);
+    const startTs = startDate ? parseDate(startDate) : nowSec - 90 * 86400;
+    const endTs = effectiveEnd
+      ? Math.min(parseDate(effectiveEnd) + 86399, nowSec)
+      : nowSec;
     return { startTs, endTs };
-  }, [startDate, endDate]);
+  }, [startDate, endDate, endDateUserSet]);
 
   // Compute position index offset per card group (for coloring polymarket legs)
   const cardPositionIndex = useMemo(() => {
@@ -1040,7 +1055,7 @@ export function BacktesterTab() {
           type="date"
           size="small"
           value={endDate}
-          onChange={e => setEndDate(e.target.value)}
+          onChange={e => { setEndDate(e.target.value); setEndDateUserSet(true); }}
           InputLabelProps={{ shrink: true }}
           sx={{ width: 180 }}
         />
