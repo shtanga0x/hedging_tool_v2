@@ -8,6 +8,7 @@ import { darkTheme, lightTheme } from './theme';
 import { PositionBuilderTab } from './components/builder/PositionBuilderTab';
 import { PositionFinderTab } from './components/finder/PositionFinderTab';
 import { BacktesterTab } from './components/backtester/BacktesterTab';
+import { DocsTab } from './components/docs/DocsTab';
 import type { BuilderTransferPayload } from './types';
 
 interface ErrorBoundaryState { error: Error | null }
@@ -42,7 +43,7 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 
 declare const __APP_VERSION__: string;
 
-type TabValue = 'builder' | 'finder' | 'backtester';
+type TabValue = 'builder' | 'finder' | 'backtester' | 'docs';
 
 export default function App() {
   const [isDark, setIsDark] = useState(true);
@@ -79,6 +80,7 @@ export default function App() {
             <Tab label="Position Builder" value="builder" />
             <Tab label="Position Finder" value="finder" />
             <Tab label="Backtester" value="backtester" />
+            <Tab label="Docs" value="docs" />
           </Tabs>
           <Typography
             component="a"
@@ -130,6 +132,11 @@ export default function App() {
         <Box sx={{ display: activeTab === 'backtester' ? 'block' : 'none' }}>
           <TabErrorBoundary>
             <BacktesterTab />
+          </TabErrorBoundary>
+        </Box>
+        <Box sx={{ display: activeTab === 'docs' ? 'block' : 'none' }}>
+          <TabErrorBoundary>
+            <DocsTab />
           </TabErrorBoundary>
         </Box>
       </Box>

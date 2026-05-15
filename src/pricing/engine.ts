@@ -362,6 +362,23 @@ export function bybitTradingFee(indexPrice: number, optionPrice: number, quantit
   return Math.min(0.0003 * indexPrice, 0.07 * optionPrice) * quantity;
 }
 
+/** Bybit delivery (settlement) fee at expiration.
+ * Per Bybit help-center: min(0.015% × IndexPrice, 12.5% × intrinsic) × |Size|.
+ * Only ITM options (which auto-exercise) are charged; OTM expire worthless with no fee.
+ * Both buyer and seller pay this fee on exercise. */
+export function bybitDeliveryFee(
+  settlementPrice: number,
+  strike: number,
+  optionsType: 'Call' | 'Put',
+  quantity: number,
+): number {
+  const intrinsic = optionsType === 'Call'
+    ? Math.max(settlementPrice - strike, 0)
+    : Math.max(strike - settlementPrice, 0);
+  if (intrinsic <= 0) return 0;
+  return Math.min(0.00015 * settlementPrice, 0.125 * intrinsic) * Math.abs(quantity);
+}
+
 /** Bybit initial margin for SHORT option: max(markPrice, 10% × indexPrice) × qty */
 export function bybitInitialMargin(indexPrice: number, markPrice: number, quantity: number): number {
   return Math.max(markPrice, 0.1 * indexPrice) * quantity;
@@ -555,6 +572,10 @@ export function computeCombinedPnlCurve(
       const currentValue = bsPrice(cryptoPrice, pos.strike, iv, tau, pos.optionsType);
       const sideMultiplier = pos.side === 'buy' ? 1 : -1;
       totalPnl += (currentValue - pos.entryPrice) * sideMultiplier * pos.quantity - pos.entryFee;
+      // Delivery fee only at expiration and only for ITM options (per Bybit rules).
+      if (tau <= 0) {
+        totalPnl -= bybitDeliveryFee(cryptoPrice, pos.strike, pos.optionsType, pos.quantity);
+      }
     }
 
     points.push({ cryptoPrice, pnl: totalPnl });

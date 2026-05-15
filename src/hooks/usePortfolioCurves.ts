@@ -7,6 +7,7 @@ import {
   priceOptionYes,
   interpolateSmile,
   autoH,
+  bybitDeliveryFee,
   type SmilePoint,
 } from '../pricing/engine';
 
@@ -172,6 +173,10 @@ function computeBybitOnlyCurve(
       const currentValue = bsPrice(cryptoPrice, pos.strike, iv, tau, pos.optionsType);
       const sideMultiplier = pos.side === 'buy' ? 1 : -1;
       pnl += (currentValue - pos.entryPrice) * sideMultiplier * pos.quantity - pos.entryFee;
+      // Delivery fee only at expiration and only for ITM options (per Bybit rules).
+      if (tau <= 0) {
+        pnl -= bybitDeliveryFee(cryptoPrice, pos.strike, pos.optionsType, pos.quantity);
+      }
     }
     points.push({ cryptoPrice, pnl });
   }
