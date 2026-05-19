@@ -282,10 +282,10 @@ export function BacktestPolymarketCard({
                     <TableCell>Strike</TableCell>
                     <TableCell align="right">YES p</TableCell>
                     <TableCell padding="checkbox" align="center">YES</TableCell>
-                    <TableCell sx={{ minWidth: 72 }}>YES qty</TableCell>
+                    <TableCell sx={{ minWidth: 100 }}>YES qty</TableCell>
                     <TableCell align="right">NO p</TableCell>
                     <TableCell padding="checkbox" align="center">NO</TableCell>
-                    <TableCell sx={{ minWidth: 72 }}>NO qty</TableCell>
+                    <TableCell sx={{ minWidth: 100 }}>NO qty</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -320,7 +320,7 @@ export function BacktestPolymarketCard({
                               type="number"
                               value={Math.round(yesSel.quantity)}
                               onChange={e => updateSelQty(market.id, 'YES', Math.max(0, Math.round(parseFloat(e.target.value)) || 0))}
-                              sx={{ width: 72 }}
+                              sx={{ width: 100 }}
                               inputProps={{ min: 0, step: 1 }}
                             />
                           )}
@@ -343,7 +343,7 @@ export function BacktestPolymarketCard({
                               type="number"
                               value={Math.round(noSel.quantity)}
                               onChange={e => updateSelQty(market.id, 'NO', Math.max(0, Math.round(parseFloat(e.target.value)) || 0))}
-                              sx={{ width: 72 }}
+                              sx={{ width: 100 }}
                               inputProps={{ min: 0, step: 1 }}
                             />
                           )}
