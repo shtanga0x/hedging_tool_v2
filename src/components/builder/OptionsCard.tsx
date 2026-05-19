@@ -104,6 +104,18 @@ export function OptionsCard({
     [chains, selectedExpiry]
   );
 
+  // Sync selectedExpiry from incoming data.chain (e.g., from Position Finder transfer
+  // or a loaded snapshot) once the live chains list arrives. Without this, the dropdown
+  // appears empty and selecting the matching expiry would clobber the transferred legs.
+  useEffect(() => {
+    if (selectedExpiry !== '' || chains.length === 0) return;
+    const target = data.chain?.expiryTimestamp
+      ?? data.selectedOptions[0]?.expiryTimestamp;
+    if (!target) return;
+    const match = chains.find(c => c.expiryTimestamp === target);
+    if (match) setSelectedExpiry(match.expiryTimestamp);
+  }, [chains, selectedExpiry, data.chain, data.selectedOptions]);
+
   useEffect(() => {
     if (activeChain) {
       update({ chain: activeChain });
@@ -341,11 +353,16 @@ export function OptionsCard({
           <Box sx={{ mb: 2 }}>
             <Select size="small" value={selectedExpiry}
               onChange={e => {
-                setSelectedExpiry(e.target.value as number | '');
-                // Clear all selected positions when expiry changes — stale strikes are no longer valid
-                setCallQty(new Map());
-                setPutQty(new Map());
-                update({ selectedOptions: [] });
+                const next = e.target.value as number | '';
+                // Only clear selected positions when the expiry actually changes —
+                // re-selecting the same expiry must preserve legs transferred from
+                // Position Finder so the user can tweak strike/size in-place.
+                if (next !== selectedExpiry) {
+                  setCallQty(new Map());
+                  setPutQty(new Map());
+                  update({ selectedOptions: [] });
+                }
+                setSelectedExpiry(next);
               }}
               displayEmpty sx={{ minWidth: 240 }} disabled={loading}
             >
