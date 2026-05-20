@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTheme } from '@mui/material/styles';
-import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip, Slider, Typography } from '@mui/material';
+import { Box, Chip, ToggleButton, ToggleButtonGroup, Button, Menu, MenuItem, IconButton, Tooltip, Typography } from '@mui/material';
+import { RangeCurtain } from '../shared/RangeCurtain';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import ZoomIn from '@mui/icons-material/ZoomIn';
 import ZoomOut from '@mui/icons-material/ZoomOut';
@@ -820,27 +821,33 @@ export function BacktestChart({
         </ComposedChart>
       </ResponsiveContainer>
 
-      {/* Time-range curtain slider */}
-      <Box sx={{ px: '52px', pt: 0.5, pb: 0 }}>
-        <Slider
-          value={[Math.round(curtainFrac[0] * 1000), Math.round(curtainFrac[1] * 1000)]}
-          min={0}
-          max={1000}
-          disableSwap
-          size="small"
-          onChange={(_, val) => {
-            const [l, r] = val as number[];
-            setCurtainFrac([l / 1000, r / 1000]);
+      {/* Time-range curtain — drag [ ] handles or double-click to enter a date */}
+      <Box sx={{ px: '52px', pt: 1, pb: 0 }}>
+        <RangeCurtain
+          fullBounds={[startTimestamp, endTimestamp]}
+          value={[visibleStartTs, visibleEndTs]}
+          onChange={(next) => {
+            if (totalRange <= 0) return;
+            setCurtainFrac([
+              Math.max(0, Math.min(1, (next[0] - startTimestamp) / totalRange)),
+              Math.max(0, Math.min(1, (next[1] - startTimestamp) / totalRange)),
+            ]);
           }}
-          valueLabelDisplay="auto"
-          valueLabelFormat={v =>
-            new Date((startTimestamp + (v / 1000) * totalRange) * 1000)
-              .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
-          }
-          sx={{
-            '& .MuiSlider-track': { bgcolor: isDark ? '#4A90D9' : '#1565C0', opacity: 0.7 },
-            '& .MuiSlider-rail': { bgcolor: isDark ? 'rgba(139,157,195,0.25)' : 'rgba(0,0,0,0.15)', opacity: 1 },
-            '& .MuiSlider-thumb': { width: 14, height: 14 },
+          isDark={isDark}
+          editInputType="date"
+          editInputWidth={120}
+          formatValue={(sec) => {
+            const d = new Date(sec * 1000);
+            const yyyy = d.getUTCFullYear();
+            const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(d.getUTCDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+          }}
+          parseValue={(s) => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+            if (m) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000);
+            const t = Date.parse(s);
+            return Number.isFinite(t) ? Math.floor(t / 1000) : NaN;
           }}
         />
       </Box>

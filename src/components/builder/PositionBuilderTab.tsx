@@ -8,10 +8,11 @@ import {
   Fab,
   Paper,
   Typography,
-  Slider,
   TextField,
   Button,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
+import { RangeCurtain } from '../shared/RangeCurtain';
 import Add from '@mui/icons-material/Add';
 import SaveAlt from '@mui/icons-material/SaveAlt';
 import Upload from '@mui/icons-material/Upload';
@@ -117,6 +118,7 @@ function getCardExpiryTs(card: PositionCard): number {
 }
 
 export function PositionBuilderTab({ transferPayload, onTransferConsumed }: PositionBuilderTabProps) {
+  const isDark = useTheme().palette.mode === 'dark';
   const [cards, setCards] = useState<PositionCard[]>([]);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [spotPrice, setSpotPrice] = useState(0);
@@ -832,15 +834,14 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                     inputProps={{ step: 1000 }}
                   />
                 </Box>
-                <Box sx={{ px: 2 }}>
-                  <Slider
+                <Box sx={{ px: 2, pt: 0.5 }}>
+                  <RangeCurtain
+                    fullBounds={sliderBounds}
                     value={priceRange}
-                    onChange={(_, v) => setPriceRange(v as [number, number])}
-                    min={sliderBounds[0]}
-                    max={sliderBounds[1]}
+                    onChange={setPriceRange}
+                    isDark={isDark}
                     step={sliderStep}
-                    valueLabelDisplay="auto"
-                    valueLabelFormat={v => `$${formatPrice(v as number)}`}
+                    formatValue={v => v.toFixed(0)}
                   />
                 </Box>
               </Box>

@@ -8,9 +8,10 @@ import {
   TableCell,
   Typography,
   Chip,
-  Slider,
   Tooltip,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
+import { RangeCurtain } from '../shared/RangeCurtain';
 import type {
   StrikeOptResult,
   OptMatchResult,
@@ -166,6 +167,7 @@ export function VizCard({
   smile: SmilePoint[];
   bybitQty: number;
 }) {
+  const isDark = useTheme().palette.mode === 'dark';
   const { market, isUpBarrier, polyIv } = result;
   const { polyQty, noAskPrice, bybitAsk, bybitFee, shortBid, shortFee, instrument, ticker, shortInstrument, shortTicker } = match;
 
@@ -232,15 +234,13 @@ export function VizCard({
         <Chip label={`✕ Short ${shortInstrument.symbol} @ $${shortBid.toFixed(2)}`} size="small" sx={{ bgcolor: OPT_COLOR, color: '#fff' }} />
       </Box>
       <Box sx={{ px: 1, mb: 1 }}>
-        <Slider
+        <RangeCurtain
+          fullBounds={sliderBounds}
           value={priceRange}
-          onChange={(_, v) => setPriceRange(v as [number, number])}
-          min={sliderBounds[0]}
-          max={sliderBounds[1]}
+          onChange={setPriceRange}
+          isDark={isDark}
           step={1000}
-          valueLabelDisplay="auto"
-          valueLabelFormat={v => `$${v.toLocaleString()}`}
-          size="small"
+          formatValue={v => v.toFixed(0)}
         />
       </Box>
       <ProjectionChart
