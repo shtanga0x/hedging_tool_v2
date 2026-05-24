@@ -110,7 +110,7 @@ export function PolymarketSearch({ onEventLoaded, loading: externalLoading, even
             <IconButton
               size="small"
               component="a"
-              href={`https://polymarket.com/event/${eventSlug}?r=shtanga`}
+              href={`https://polymarket.com/event/${eventSlug}?via=shtanga`}
               target="_blank"
               rel="noopener noreferrer"
             >
