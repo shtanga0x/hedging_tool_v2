@@ -131,17 +131,40 @@ function parseOptionalPrice(raw: string | number | undefined): number | undefine
   return isFinite(v) && v > 0 && v < 1 ? v : undefined;
 }
 
+function parseJsonArray(raw: unknown): unknown[] | null {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseMarkets(markets: PolymarketEvent['markets']): ParsedMarket[] {
-  return markets.map((market) => {
-    const tokenIds = JSON.parse(market.clobTokenIds) as string[];
-    let currentPrice = 0;
-    try {
-      const prices = JSON.parse(market.outcomePrices) as string[];
-      currentPrice = parseFloat(prices[0]); // YES price (mid)
-    } catch {
-      currentPrice = 0;
+  const parsedMarkets = markets.flatMap((market) => {
+    const tokenIds = parseJsonArray(market.clobTokenIds)
+      ?.map((tokenId) => String(tokenId))
+      .filter(Boolean);
+
+    if (!tokenIds || tokenIds.length < 2) {
+      console.warn('[Polymarket] Skipping market without CLOB token ids', {
+        id: market.id,
+        question: market.question,
+      });
+      return [];
     }
-    return {
+
+    let currentPrice = 0;
+    const prices = parseJsonArray(market.outcomePrices);
+    if (prices?.[0] != null) {
+      const yesPrice = parseFloat(String(prices[0]));
+      currentPrice = Number.isFinite(yesPrice) ? yesPrice : 0;
+    }
+
+    return [{
       id: market.id,
       question: market.question,
       groupItemTitle: market.groupItemTitle,
@@ -154,8 +177,14 @@ export function parseMarkets(markets: PolymarketEvent['markets']): ParsedMarket[
       bestBid: parseOptionalPrice(market.bestBid),
       bestAsk: parseOptionalPrice(market.bestAsk),
       strikePrice: parseStrikePrice(market.groupItemTitle || ''),
-    };
+    }];
   });
+
+  if (markets.length > 0 && parsedMarkets.length === 0) {
+    throw new Error('No tradable Polymarket markets found for this event.');
+  }
+
+  return parsedMarkets;
 }
 
 /** Auto-detect crypto asset from event data */
