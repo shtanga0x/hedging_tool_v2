@@ -50,7 +50,7 @@ export interface EventSearchResult {
   slug: string;
   title: string;
   endDate: number; // Unix seconds
-  series?: { cgAssetName?: string };
+  series?: PolymarketEvent['series'];
 }
 
 export async function searchEvents(query: string): Promise<EventSearchResult[]> {
@@ -117,12 +117,19 @@ export async function fetchEventBySlug(slug: string): Promise<PolymarketEvent> {
   };
 }
 
-/** Parse strike price from groupItemTitle like "↑$100,000" or "$95,000" */
+/** Parse strike price from groupItemTitle like "↑$100,000", "$96", or "↑$1.5T" */
 export function parseStrikePrice(title: string): number {
-  // Remove arrows, dollar signs, commas, whitespace
-  const cleaned = title.replace(/[↑↓$,\s]/g, '');
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? 0 : num;
+  const cleaned = title.replace(/[↑↓$,\s_]/g, '').toUpperCase();
+  const match = cleaned.match(/(-?\d+(?:\.\d+)?)([KMBT])?/);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  if (!Number.isFinite(num)) return 0;
+  const multiplier = match[2] === 'T' ? 1e12
+    : match[2] === 'B' ? 1e9
+    : match[2] === 'M' ? 1e6
+    : match[2] === 'K' ? 1e3
+    : 1;
+  return num * multiplier;
 }
 
 function parseOptionalPrice(raw: string | number | undefined): number | undefined {
@@ -187,28 +194,43 @@ export function parseMarkets(markets: PolymarketEvent['markets']): ParsedMarket[
   return parsedMarkets;
 }
 
-/** Auto-detect crypto asset from event data */
+function collectSeriesText(series: PolymarketEvent['series']): string {
+  const items = Array.isArray(series) ? series : series ? [series] : [];
+  return items
+    .flatMap(item => [
+      item.cgAssetName,
+      item.seriesSlug,
+      item.slug,
+      item.title,
+      item.ticker,
+    ])
+    .filter(Boolean)
+    .join(' ');
+}
+
+function eventSearchText(event: PolymarketEvent): string {
+  return [
+    event.slug,
+    event.title,
+    event.description,
+    collectSeriesText(event.series),
+    ...(event.markets ?? []).slice(0, 6).flatMap(m => [m.question, m.groupItemTitle]),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+/** Auto-detect underlying asset from event data */
 export function detectCrypto(event: PolymarketEvent): CryptoOption | null {
-  // Check series.cgAssetName first
-  const cgAsset = (event.series?.cgAssetName || '').toLowerCase();
-  if (cgAsset === 'bitcoin' || cgAsset === 'btc') return 'BTC';
-  if (cgAsset === 'ethereum' || cgAsset === 'eth') return 'ETH';
-  if (cgAsset === 'solana' || cgAsset === 'sol') return 'SOL';
-  if (cgAsset === 'ripple' || cgAsset === 'xrp') return 'XRP';
-
-  // Check series slug
-  const slug = (event.series?.seriesSlug || '').toLowerCase();
-  if (slug.includes('btc') || slug.includes('bitcoin')) return 'BTC';
-  if (slug.includes('eth') || slug.includes('ethereum')) return 'ETH';
-  if (slug.includes('sol') || slug.includes('solana')) return 'SOL';
-  if (slug.includes('xrp') || slug.includes('ripple')) return 'XRP';
-
-  // Parse event title
-  const title = event.title.toLowerCase();
-  if (title.includes('bitcoin') || title.includes('btc')) return 'BTC';
-  if (title.includes('ethereum') || title.includes('eth')) return 'ETH';
-  if (title.includes('solana') || title.includes('sol')) return 'SOL';
-  if (title.includes('xrp') || title.includes('ripple')) return 'XRP';
+  const text = eventSearchText(event);
+  if (/\b(bitcoin|btc)\b/.test(text)) return 'BTC';
+  if (/\b(ethereum|eth)\b/.test(text)) return 'ETH';
+  if (/\b(solana|sol)\b/.test(text)) return 'SOL';
+  if (/\b(ripple|xrp)\b/.test(text)) return 'XRP';
+  if (/\b(xauusd|xaut|gold|gc)\b/.test(text)) return 'XAUT';
+  if (/\b(silver|xagusd|xag|si)\b/.test(text)) return 'SI';
+  if (/\b(wti|crude oil|crude-oil|cl)\b/.test(text)) return 'WTI';
+  if (/\b(spy|s&p 500|s & p 500|s and p 500)\b/.test(text)) return 'SPY';
+  if (/\b(meta|meta platforms|facebook)\b/.test(text)) return 'META';
+  if (/\b(openai|openai's valuation|openai valuation)\b/.test(text)) return 'OPENAI';
 
   return null;
 }
@@ -216,9 +238,9 @@ export function detectCrypto(event: PolymarketEvent): CryptoOption | null {
 /** Detect option type from event/market data */
 export function detectOptionType(event: PolymarketEvent): OptionType {
   // Check series slug patterns
-  const slug = (event.series?.seriesSlug || '').toLowerCase();
-  if (slug.includes('hit') || slug.includes('reach') || slug.includes('dip')) return 'hit';
-  if (slug.includes('above') || slug.includes('strike')) return 'above';
+  const text = eventSearchText(event);
+  if (text.includes('hit') || text.includes('reach') || text.includes('dip')) return 'hit';
+  if (text.includes('above') || text.includes('below') || text.includes('strike')) return 'above';
 
   // Check market questions
   for (const market of (event.markets ?? [])) {
@@ -234,9 +256,10 @@ export function detectOptionType(event: PolymarketEvent): OptionType {
 /** Detect display type including 'price' (close-price) events */
 export function detectEventDisplayType(event: PolymarketEvent): 'above' | 'hit' | 'price' {
   const eventSlug = (event.slug || '').toLowerCase();
+  const text = eventSearchText(event);
   // 'price' events have the pattern "bitcoin-price-on-march-29" — slug contains "-price-on-"
   // Explicitly exclude hit-keyword slugs like "what-price-will-bitcoin-hit-..."
-  const hasHitKeyword = eventSlug.includes('hit') || eventSlug.includes('reach') || eventSlug.includes('dip');
+  const hasHitKeyword = text.includes('hit') || text.includes('reach') || text.includes('dip');
   if (
     !hasHitKeyword &&
     (eventSlug.includes('-price-on-') || eventSlug.startsWith('price-on-'))

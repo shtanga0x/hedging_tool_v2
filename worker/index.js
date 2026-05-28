@@ -5,6 +5,7 @@
  *   /api/gamma/*   -> https://gamma-api.polymarket.com/*
  *   /api/clob/*    -> https://clob.polymarket.com/*
  *   /api/bybit/*   -> https://api.bybit.com/*
+ *   /api/stooq/*    -> https://stooq.com/*
  *   /api/deribit/* -> https://www.deribit.com/*
  *
  * Deribit 429 handling: retries via HTTP-CONNECT proxy rotation.
@@ -61,6 +62,7 @@ const ROUTES = {
   '/api/gamma':   'https://gamma-api.polymarket.com',
   '/api/clob':    'https://clob.polymarket.com',
   '/api/bybit':   'https://api.bybit.com',
+  '/api/stooq':   'https://stooq.com',
   '/api/deribit': 'https://www.deribit.com',
 };
 

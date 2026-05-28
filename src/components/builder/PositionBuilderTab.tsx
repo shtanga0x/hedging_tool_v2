@@ -53,7 +53,7 @@ function generateId() {
 
 function detectCryptoFromSymbol(symbol: string): CryptoOption | null {
   const upper = symbol.toUpperCase();
-  for (const c of ['BTC', 'ETH', 'SOL', 'XRP'] as CryptoOption[]) {
+  for (const c of ['BTC', 'ETH', 'SOL', 'XRP', 'XAUT', 'WTI', 'SI', 'SPY', 'META', 'OPENAI'] as CryptoOption[]) {
     if (upper.startsWith(c)) return c;
   }
   return null;
@@ -215,6 +215,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         bybitChainData.tickers.map(t => [t.symbol, t])
       );
       const chain: BybitChainType = {
+        baseCoin: bybitChainData.baseCoin,
         expiryLabel: bybitChainData.expiryLabel,
         expiryTimestamp: bybitChainData.expiryTimestamp,
         instruments: bybitChainData.instruments,
@@ -224,6 +225,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         id: generateId(),
         kind: 'options',
         data: {
+          baseCoin: bybitChainData.baseCoin,
           chain,
           selectedOptions: bybitSelections,
           minimized: false,
@@ -245,7 +247,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     const baseData = kind === 'polymarket'
       ? { event: null, optionType: primaryOptionType, crypto: primaryCrypto, markets: [], selections: [], minimized: false }
       : kind === 'options'
-      ? { chain: null, selectedOptions: [], minimized: false }
+      ? { baseCoin: primaryCrypto === 'XAUT' ? 'XAUT' : 'BTC', chain: null, selectedOptions: [], minimized: false }
       : { symbol: defaultFuturesSymbol, entryPrice: spotPrice || 0, size: 0.001, leverage: 5, minimized: false };
 
     setCards(prev => [...prev, { id: generateId(), kind, data: baseData as PolymarketCardData | OptionsCardData | FuturesCardData }]);
@@ -332,7 +334,8 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     setCards(prev => {
       // Find an existing OptionsCard with matching chain, or create a new one
       const existingIdx = prev.findIndex(c => c.kind === 'options' && bybitChain &&
-        (c.data as OptionsCardData).chain?.expiryTimestamp === bybitChain.expiryTimestamp);
+        (c.data as OptionsCardData).chain?.expiryTimestamp === bybitChain.expiryTimestamp &&
+        ((c.data as OptionsCardData).baseCoin ?? (c.data as OptionsCardData).chain?.baseCoin ?? 'BTC') === (bybitChain.baseCoin ?? 'BTC'));
       if (existingIdx >= 0) {
         return prev.map((c, i) => {
           if (i !== existingIdx) return c;
@@ -350,6 +353,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
         id: generateId(),
         kind: 'options',
         data: {
+          baseCoin: bybitChain?.baseCoin,
           chain: bybitChain,
           selectedOptions: [longOpt, shortOpt],
           minimized: false,
@@ -368,7 +372,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     const serialized = cards.map(card => {
       if (card.kind === 'options') {
         const d = card.data as OptionsCardData;
-        return { id: card.id, kind: card.kind, data: { chain: null, selectedOptions: d.selectedOptions, minimized: d.minimized } };
+        return { id: card.id, kind: card.kind, data: { baseCoin: d.baseCoin ?? d.chain?.baseCoin, chain: null, selectedOptions: d.selectedOptions, minimized: d.minimized } };
       }
       return { id: card.id, kind: card.kind, data: card.data };
     });
@@ -500,6 +504,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               theta: t.theta ?? 0,
             }]));
             const chain: BybitChainType = {
+              baseCoin: v1.bybitChain.baseCoin ?? (v1.bybitChain.instruments?.[0]?.symbol?.startsWith('XAUT') ? 'XAUT' : 'BTC'),
               expiryLabel: v1.bybitChain.expiryLabel,
               expiryTimestamp: v1.bybitChain.expiryTimestamp,
               instruments: v1.bybitChain.instruments,
@@ -539,7 +544,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
             newCards.push({
               id: generateId(),
               kind: 'options',
-              data: { chain, selectedOptions, minimized: false } as OptionsCardData,
+              data: { baseCoin: chain.baseCoin, chain, selectedOptions, minimized: false } as OptionsCardData,
             });
             setBybitChain(chain);
           }
@@ -747,11 +752,15 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
           <>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
               <Typography variant="h6" fontWeight={600}>Portfolio P&L</Typography>
-              {spotPrice > 0 && (
-                <Typography variant="body2" color="text.secondary">
-                  Spot: ${formatPrice(spotPrice)}
-                </Typography>
-              )}
+              <TextField
+                label={`${cryptoSymbol} spot`}
+                size="small"
+                type="number"
+                value={spotPrice || ''}
+                onChange={e => setSpotPrice(parseFloat(e.target.value) || 0)}
+                inputProps={{ min: 0, step: 'any' }}
+                sx={{ width: 160 }}
+              />
               {groupExpiryLabel && (
                 <Typography variant="body2" color="text.secondary">
                   Earliest expiry: {groupExpiryLabel}
@@ -781,7 +790,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 {cards.filter(c => c.kind === 'futures').map((c, i) => {
                   const d = c.data as FuturesCardData;
                   if (!d.entryPrice || !d.size) return null;
-                  const asset = ['ETH','SOL','XRP'].find(a => d.symbol.startsWith(a)) ?? 'BTC';
+                  const asset = detectCryptoFromSymbol(d.symbol) ?? 'BTC';
                   const lev = d.leverage ?? 5;
                   return (
                     <Chip
@@ -922,7 +931,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                   const lev = d.leverage ?? 5;
                   const notional = Math.abs(d.size) * d.entryPrice;
                   const margin = lev > 0 ? notional / lev : 0;
-                  const asset = ['ETH','SOL','XRP'].find(a => d.symbol.startsWith(a)) ?? 'BTC';
+                  const asset = detectCryptoFromSymbol(d.symbol) ?? 'BTC';
                   return (
                     <Box key={i} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0.5, py: 0.3, pl: 1 }}>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>

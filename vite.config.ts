@@ -26,6 +26,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/bybit/, ''),
       },
+      '/api/stooq': {
+        target: 'https://stooq.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/stooq/, ''),
+      },
       '/api/deribit': {
         target: 'https://www.deribit.com',
         changeOrigin: true,

@@ -4,10 +4,12 @@ import {
   Typography,
   CircularProgress,
   Alert,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
-import type { BybitOptionChain as BybitChainType } from '../../types';
+import type { BybitBaseCoin, BybitOptionChain as BybitChainType } from '../../types';
 import { fetchBybitInstruments, fetchBybitTickers, fetchBybitSpotPrice, groupByExpiry } from '../../api/bybit';
 
 interface BybitOptionChainProps {
@@ -15,9 +17,11 @@ interface BybitOptionChainProps {
   onSpotPriceLoaded: (price: number) => void;
   requestedExpiry?: number;
   refreshToken?: number;
+  baseCoin: BybitBaseCoin;
+  onBaseCoinChange: (baseCoin: BybitBaseCoin) => void;
 }
 
-export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requestedExpiry, refreshToken }: BybitOptionChainProps) {
+export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requestedExpiry, refreshToken, baseCoin, onBaseCoinChange }: BybitOptionChainProps) {
   const [chains, setChains] = useState<BybitChainType[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<number | ''>('');
   const [loading, setLoading] = useState(true);
@@ -29,13 +33,16 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
     (async () => {
       try {
         setLoading(true);
+        setError(null);
+        setSelectedExpiry('');
+        onChainSelected(null);
         const [instruments, tickers, spot] = await Promise.all([
-          fetchBybitInstruments(),
-          fetchBybitTickers(),
-          fetchBybitSpotPrice(),
+          fetchBybitInstruments(baseCoin),
+          fetchBybitTickers(baseCoin),
+          fetchBybitSpotPrice(baseCoin),
         ]);
         if (cancelled) return;
-        const grouped = groupByExpiry(instruments, tickers);
+        const grouped = groupByExpiry(instruments, tickers, baseCoin);
         setChains(grouped);
         onSpotPriceLoaded(spot);
       } catch (err) {
@@ -45,7 +52,7 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
       }
     })();
     return () => { cancelled = true; };
-  }, [onSpotPriceLoaded, refreshToken]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onSpotPriceLoaded, onChainSelected, refreshToken, baseCoin]);
 
   const activeChain = useMemo(() => {
     if (selectedExpiry === '') return null;
@@ -80,10 +87,25 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
     }
   }, [requestedExpiry, chains]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const selector = (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+      <Typography variant="body2" color="text.secondary">Underlying</Typography>
+      <ToggleButtonGroup
+        value={baseCoin}
+        exclusive
+        size="small"
+        onChange={(_, v) => v && onBaseCoinChange(v as BybitBaseCoin)}
+      >
+        <ToggleButton value="BTC">BTC</ToggleButton>
+        <ToggleButton value="XAUT">XAUT</ToggleButton>
+      </ToggleButtonGroup>
+    </Box>
+  );
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 600 }}>Bybit BTC Options</Typography>
+        {selector}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <CircularProgress size={20} />
           <Typography variant="body2" color="text.secondary">Loading option chain...</Typography>
@@ -94,7 +116,7 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Typography variant="h6" sx={{ fontWeight: 600 }}>Bybit BTC Options</Typography>
+      {selector}
 
       {error && <Alert severity="error">{error}</Alert>}
 

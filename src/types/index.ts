@@ -11,6 +11,14 @@ export interface Market {
   bestAsk?: string | number; // YES token best ask (CLOB top-of-book)
 }
 
+export interface PolymarketSeries {
+  cgAssetName?: string;
+  seriesSlug?: string;
+  slug?: string;
+  title?: string;
+  ticker?: string;
+}
+
 export interface PolymarketEvent {
   id: string;
   slug: string;
@@ -19,10 +27,7 @@ export interface PolymarketEvent {
   startDate: number; // Unix timestamp (seconds)
   endDate: number; // Unix timestamp (seconds)
   markets: Market[];
-  series?: {
-    cgAssetName?: string;
-    seriesSlug?: string;
-  };
+  series?: PolymarketSeries | PolymarketSeries[];
 }
 
 export interface PricePoint {
@@ -49,7 +54,19 @@ export interface ParsedMarket {
   strikePrice: number; // Parsed strike price from groupItemTitle
 }
 
-export type CryptoOption = 'BTC' | 'ETH' | 'SOL' | 'XRP';
+export type CryptoOption =
+  | 'BTC'
+  | 'ETH'
+  | 'SOL'
+  | 'XRP'
+  | 'XAUT'
+  | 'SI'
+  | 'WTI'
+  | 'SPY'
+  | 'META'
+  | 'OPENAI';
+
+export type BybitBaseCoin = 'BTC' | 'XAUT';
 
 export type OptionType = 'above' | 'hit';
 
@@ -93,6 +110,7 @@ export interface BybitTicker {
 }
 
 export interface BybitOptionChain {
+  baseCoin?: BybitBaseCoin;
   expiryLabel: string;      // e.g. "28 Feb 2025"
   expiryTimestamp: number;  // Unix ms
   instruments: BybitInstrument[];
@@ -166,6 +184,7 @@ export interface PolymarketCardData {
 }
 
 export interface OptionsCardData {
+  baseCoin?: BybitBaseCoin;
   chain: BybitOptionChain | null;
   selectedOptions: {
     symbol: string;
@@ -241,6 +260,7 @@ export interface BuilderTransferPayload {
   polyMarkets: ParsedMarket[];
   polySelections: { marketId: string; side: Side; quantity: number; entryPrice: number }[];
   bybitChainData: {
+    baseCoin?: BybitBaseCoin;
     expiryLabel: string;
     expiryTimestamp: number;
     instruments: BybitInstrument[];

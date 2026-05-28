@@ -20,6 +20,7 @@ import type {
   PolymarketEvent,
   ParsedMarket,
   CryptoOption,
+  BybitBaseCoin,
   OptionType,
   BybitOptionChain as BybitChainType,
   StrikeOptResult,
@@ -41,6 +42,10 @@ interface PositionFinderTabProps {
   onSendToBuilder: (payload: BuilderTransferPayload) => void;
 }
 
+function preferredBybitBase(asset: CryptoOption | null): BybitBaseCoin {
+  return asset === 'XAUT' ? 'XAUT' : 'BTC';
+}
+
 export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   const [polyEvent, setPolyEvent] = useState<PolymarketEvent | null>(null);
   const [polyMarkets, setPolyMarkets] = useState<ParsedMarket[]>([]);
@@ -52,6 +57,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bybitQty, setBybitQty] = useState(0.01);
+  const [bybitBase, setBybitBase] = useState<BybitBaseCoin>('BTC');
   const [selectedResult, setSelectedResult] = useState<StrikeOptResult | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<OptMatchResult | null>(null);
   const [loadedExpiry, setLoadedExpiry] = useState<number | undefined>(undefined);
@@ -93,6 +99,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     setPolyMarkets(markets);
     latestPolyMarketsRef.current = markets;
     setCrypto(detectedCrypto);
+    setBybitBase(preferredBybitBase(detectedCrypto));
     setOptionType(detectedOptionType);
     latestOptionTypeRef.current = detectedOptionType;
     setResults([]);
@@ -133,11 +140,16 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   }, []);
 
   const handleSpotLoaded = useCallback((price: number) => {
+    const bybitMatchesEvent =
+      !crypto ||
+      (bybitBase === 'BTC' && crypto === 'BTC') ||
+      (bybitBase === 'XAUT' && crypto === 'XAUT');
+    if (!bybitMatchesEvent) return;
     if (price > 0) {
       setSpotPrice(price);
       latestSpotRef.current = price;
     }
-  }, []);
+  }, [crypto, bybitBase]);
 
   const handleRun = useCallback(async () => {
     if (!bybitChain || polyMarkets.length === 0 || spotPrice <= 0) return;
@@ -232,6 +244,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
         setPolyMarkets(markets ?? []);
         latestPolyMarketsRef.current = markets ?? [];
         setCrypto(loadedCrypto ?? null);
+        setBybitBase(optCard?.data?.baseCoin ?? optCard?.data?.chain?.baseCoin ?? preferredBybitBase(loadedCrypto ?? null));
         setOptionType(loadedOptionType ?? 'above');
         latestOptionTypeRef.current = loadedOptionType ?? 'above';
         if (expiry) setLoadedExpiry(expiry);
@@ -285,6 +298,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
       id: 'finder-opts',
       kind: 'options',
       data: {
+        baseCoin: bybitBase,
         chain: null,
         selectedOptions: [
           {
@@ -330,7 +344,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
         URL.revokeObjectURL(imgUrl);
       }
     }
-  }, [polyEvent, polyMarkets, crypto, optionType, bybitQty, selectedResult, selectedMatch]);
+  }, [polyEvent, polyMarkets, crypto, optionType, bybitQty, bybitBase, selectedResult, selectedMatch]);
 
   // Send selected result to Position Builder
   const handleSendToBuilder = useCallback(() => {
@@ -342,7 +356,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
 
     const polySelections = [{
       marketId: selectedResult.market.id,
-      side: 'NO' as Side,
+      side: selectedMatch.hedgeSide as Side,
       quantity: scaledPolyQty,
       entryPrice: noEntryPrice,
     }];
@@ -371,6 +385,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     ];
 
     const bybitChainData = bybitChain ? {
+      baseCoin: bybitChain.baseCoin ?? bybitBase,
       expiryLabel: bybitChain.expiryLabel,
       expiryTimestamp: bybitChain.expiryTimestamp,
       instruments: bybitChain.instruments as BybitInstrument[],
@@ -388,7 +403,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
       optionType,
       spotPrice,
     });
-  }, [polyEvent, polyMarkets, bybitChain, crypto, optionType, spotPrice,
+  }, [polyEvent, polyMarkets, bybitChain, bybitBase, crypto, optionType, spotPrice,
       selectedResult, selectedMatch, bybitQty, onSendToBuilder]);
 
   const canRun = polyMarkets.length > 0 && bybitChain !== null && spotPrice > 0;
@@ -418,7 +433,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
               <Typography variant="subtitle1" fontWeight={600}>
                 {selectedResult.market.groupItemTitle}
               </Typography>
-              <Chip label={`×${bybitQty} BTC`} size="small" />
+              <Chip label={`×${bybitQty} ${bybitBase}`} size="small" />
             </Box>
             <Box sx={{ display: 'flex', gap: 1 }}>
               <Button
@@ -468,22 +483,41 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
               <InfoOutlined sx={{ fontSize: 16, color: 'text.secondary', cursor: 'help' }} />
             </Tooltip>
           </Box>
-          <BybitOptionChain onChainSelected={handleChainSelected} onSpotPriceLoaded={handleSpotLoaded} requestedExpiry={loadedExpiry} refreshToken={chainRefreshToken} />
+          <BybitOptionChain
+            onChainSelected={handleChainSelected}
+            onSpotPriceLoaded={handleSpotLoaded}
+            requestedExpiry={loadedExpiry}
+            refreshToken={chainRefreshToken}
+            baseCoin={bybitBase}
+            onBaseCoinChange={setBybitBase}
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+            <TextField
+              label={`Option size (${bybitBase})`}
+              size="small"
+              type="number"
+              value={bybitQty}
+              onChange={e => setBybitQty(Math.max(0.001, parseFloat(e.target.value) || 0.01))}
+              inputProps={{ min: 0.001, step: 0.01 }}
+              sx={{ width: 170 }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+              Scales chart & Poly qty
+            </Typography>
+          </Box>
           <TextField
-            label="Option size (BTC)"
+            label={`${crypto ?? bybitBase} spot / reference`}
             size="small"
             type="number"
-            value={bybitQty}
-            onChange={e => setBybitQty(Math.max(0.001, parseFloat(e.target.value) || 0.01))}
-            inputProps={{ min: 0.001, step: 0.01 }}
-            sx={{ width: 160 }}
-            helperText="Scales chart & Poly qty"
+            value={spotPrice || ''}
+            onChange={e => {
+              const next = parseFloat(e.target.value) || 0;
+              setSpotPrice(next);
+              latestSpotRef.current = next;
+            }}
+            inputProps={{ min: 0, step: 'any' }}
+            sx={{ width: 220 }}
           />
-          {spotPrice > 0 && (
-            <Typography variant="body2" color="text.secondary">
-              Spot: ${spotPrice.toLocaleString()}
-            </Typography>
-          )}
           {bybitChain && (
             <Typography variant="caption" color="text.secondary">
               {bybitChain.expiryLabel} · {(bybitChain.instruments.length / 2) | 0} strikes

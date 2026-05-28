@@ -19,6 +19,8 @@ import {
   Alert,
   TextField,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import Delete from '@mui/icons-material/Delete';
 import ExpandLess from '@mui/icons-material/ExpandLess';
@@ -26,6 +28,7 @@ import ExpandMore from '@mui/icons-material/ExpandMore';
 import InfoOutlined from '@mui/icons-material/InfoOutlined';
 import type {
   OptionsCardData,
+  BybitBaseCoin,
   BybitOptionChain as BybitChainType,
   BybitInstrument,
   BybitTicker,
@@ -52,6 +55,13 @@ interface StrikeRow {
   put:  { inst: BybitInstrument; ticker: BybitTicker } | null;
 }
 
+function inferBaseCoin(data: OptionsCardData): BybitBaseCoin {
+  if (data.baseCoin) return data.baseCoin;
+  if (data.chain?.baseCoin) return data.chain.baseCoin;
+  const symbol = data.selectedOptions[0]?.symbol ?? data.chain?.instruments[0]?.symbol ?? '';
+  return symbol.startsWith('XAUT') ? 'XAUT' : 'BTC';
+}
+
 export function OptionsCard({
   id,
   data,
@@ -64,6 +74,7 @@ export function OptionsCard({
 }: OptionsCardProps) {
   const [chains, setChains] = useState<BybitChainType[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<number | ''>('');
+  const [baseCoin, setBaseCoin] = useState<BybitBaseCoin>(() => inferBaseCoin(data));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spot, setSpot] = useState(externalSpot);
@@ -76,18 +87,23 @@ export function OptionsCard({
   }, [id, data, onUpdate]);
 
   useEffect(() => {
+    const inferred = inferBaseCoin(data);
+    if (inferred !== baseCoin) setBaseCoin(inferred);
+  }, [data, baseCoin]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
         setError(null);
         const [instruments, tickers, fetchedSpot] = await Promise.all([
-          fetchBybitInstruments(),
-          fetchBybitTickers(),
-          fetchBybitSpotPrice(),
+          fetchBybitInstruments(baseCoin),
+          fetchBybitTickers(baseCoin),
+          fetchBybitSpotPrice(baseCoin),
         ]);
         if (cancelled) return;
-        const grouped = groupByExpiry(instruments, tickers);
+        const grouped = groupByExpiry(instruments, tickers, baseCoin);
         setChains(grouped);
         if (fetchedSpot > 0) setSpot(fetchedSpot);
       } catch (err) {
@@ -97,7 +113,7 @@ export function OptionsCard({
       }
     })();
     return () => { cancelled = true; };
-  }, [refreshToken]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refreshToken, baseCoin]);
 
   const activeChain = useMemo(() =>
     selectedExpiry !== '' ? chains.find(c => c.expiryTimestamp === selectedExpiry) ?? null : null,
@@ -118,10 +134,19 @@ export function OptionsCard({
 
   useEffect(() => {
     if (activeChain) {
-      update({ chain: activeChain });
+      update({ baseCoin, chain: activeChain });
       onChainLoaded?.(activeChain);
     }
   }, [activeChain]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleBaseChange = useCallback((next: BybitBaseCoin | null) => {
+    if (!next || next === baseCoin) return;
+    setBaseCoin(next);
+    setSelectedExpiry('');
+    setCallQty(new Map());
+    setPutQty(new Map());
+    update({ baseCoin: next, chain: null, selectedOptions: [] });
+  }, [baseCoin, update]);
 
   const effectiveSpot = spot || externalSpot || 0;
 
@@ -311,6 +336,7 @@ export function OptionsCard({
             <Tooltip title="Real-time data from Bybit V5 API. Mark price, bid/ask and implied volatility (markIv) are fetched live. markIv drives Black-Scholes P&L curve calculations. Greeks (delta, gamma, vega, theta) are fetched but not used in calculations." arrow>
               <InfoOutlined sx={{ fontSize: 16, color: 'text.secondary', cursor: 'help' }} />
             </Tooltip>
+            <Chip label={baseCoin} size="small" />
             {activeChain && <Chip label={activeChain.expiryLabel} size="small" />}
             {data.selectedOptions.length > 0 && (() => {
               const expiryTs = data.selectedOptions[0]?.expiryTimestamp;
@@ -350,7 +376,16 @@ export function OptionsCard({
           )}
           {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
 
-          <Box sx={{ mb: 2 }}>
+          <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+            <ToggleButtonGroup
+              value={baseCoin}
+              exclusive
+              size="small"
+              onChange={(_, v) => handleBaseChange(v as BybitBaseCoin | null)}
+            >
+              <ToggleButton value="BTC">BTC</ToggleButton>
+              <ToggleButton value="XAUT">XAUT</ToggleButton>
+            </ToggleButtonGroup>
             <Select size="small" value={selectedExpiry}
               onChange={e => {
                 const next = e.target.value as number | '';

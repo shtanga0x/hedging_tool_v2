@@ -106,6 +106,14 @@ function parseToLibraryParams(name: string): { expiry: string; strike: number; o
 
 type AddKind = 'polymarket' | 'deribit' | 'futures';
 
+function detectBacktestAsset(symbol: string): CryptoOption {
+  const upper = symbol.toUpperCase();
+  for (const asset of ['BTC', 'ETH', 'SOL', 'XRP', 'XAUT', 'WTI', 'SI', 'SPY', 'META'] as CryptoOption[]) {
+    if (upper.startsWith(asset)) return asset;
+  }
+  return 'BTC';
+}
+
 // A card group: polymarket cards can have multiple positions per card, others are 1:1
 interface CardGroup {
   id: string;
@@ -134,7 +142,7 @@ export function BacktesterTab() {
   const [warnings, setWarnings] = useState<string[]>([]);
 
   // Crypto overlay
-  const [cryptoOverlay, setCryptoOverlay] = useState<'BTC' | 'ETH' | null>(null);
+  const [cryptoOverlay, setCryptoOverlay] = useState<CryptoOption | null>(null);
   const [cryptoCandles, setCryptoCandles] = useState<OHLCCandle[]>([]);
   const [candleInterval, setCandleInterval] = useState('1h');
 
@@ -154,7 +162,7 @@ export function BacktesterTab() {
       }
     }
     if (minTs === Infinity) return;
-    fetchCryptoCandles(cryptoOverlay as 'BTC' | 'ETH', minTs, maxTs, candleInterval)
+    fetchCryptoCandles(cryptoOverlay, minTs, maxTs, candleInterval)
       .then(candles => setCryptoCandles(candles))
       .catch(() => {});
   }, [cryptoOverlay, results, candleInterval]);
@@ -437,7 +445,7 @@ export function BacktesterTab() {
               }
             } else if (card.kind === 'futures') {
               const sym = (card.data?.symbol ?? '').toUpperCase();
-              const asset = sym.startsWith('ETH') ? 'ETH' : sym.startsWith('SOL') ? 'SOL' : sym.startsWith('XRP') ? 'XRP' : 'BTC';
+              const asset = detectBacktestAsset(sym);
               imported.push({
                 id: generateId(), kind: 'futures',
                 label: `${(card.data?.size ?? 0) >= 0 ? 'Long' : 'Short'} ${asset} futures`,

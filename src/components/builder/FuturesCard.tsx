@@ -16,9 +16,9 @@ import {
 import Delete from '@mui/icons-material/Delete';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
-import type { FuturesCardData } from '../../types';
+import type { CryptoOption, FuturesCardData } from '../../types';
 
-const ASSETS = ['BTC', 'ETH', 'SOL', 'XRP'] as const;
+const ASSETS: CryptoOption[] = ['BTC', 'ETH', 'SOL', 'XRP', 'XAUT', 'WTI', 'SI', 'SPY', 'META'];
 
 function symbolToAsset(symbol: string): string {
   return ASSETS.find(a => symbol.startsWith(a)) ?? 'BTC';

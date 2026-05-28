@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { BybitInstrument, BybitTicker, BybitOptionChain } from '../types';
+import type { BybitBaseCoin, BybitInstrument, BybitTicker, BybitOptionChain } from '../types';
 import { API_CONFIG } from './config';
 
 const { BYBIT_API_BASE } = API_CONFIG;
@@ -48,9 +48,14 @@ export function parseBybitSymbol(symbol: string): {
   };
 }
 
-/** Fetch BTC option instruments from Bybit V5 (with cursor pagination) */
-export async function fetchBybitInstruments(): Promise<BybitInstrument[]> {
-  const cacheKey = 'bybit-instruments';
+const SPOT_SYMBOLS: Record<BybitBaseCoin, string> = {
+  BTC: 'BTCUSDT',
+  XAUT: 'XAUTUSDT',
+};
+
+/** Fetch option instruments from Bybit V5 (with cursor pagination) */
+export async function fetchBybitInstruments(baseCoin: BybitBaseCoin = 'BTC'): Promise<BybitInstrument[]> {
+  const cacheKey = `bybit-instruments-${baseCoin}`;
   const cached = getCached<BybitInstrument[]>(cacheKey);
   if (cached) return cached;
 
@@ -58,7 +63,7 @@ export async function fetchBybitInstruments(): Promise<BybitInstrument[]> {
   let cursor = '';
 
   do {
-    const params: Record<string, string> = { category: 'option', baseCoin: 'BTC' };
+    const params: Record<string, string> = { category: 'option', baseCoin };
     if (cursor) params.cursor = cursor;
 
     const resp = await axios.get(`${BYBIT_API_BASE}/v5/market/instruments-info`, { params });
@@ -67,7 +72,7 @@ export async function fetchBybitInstruments(): Promise<BybitInstrument[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const item of list as any[]) {
       const parsed = parseBybitSymbol(item.symbol);
-      if (!parsed) continue;
+      if (!parsed || parsed.base !== baseCoin) continue;
       instruments.push({
         symbol: item.symbol,
         optionsType: parsed.optionsType,
@@ -83,9 +88,9 @@ export async function fetchBybitInstruments(): Promise<BybitInstrument[]> {
   return instruments;
 }
 
-/** Fetch BTC option tickers from Bybit V5 (with cursor pagination) */
-export async function fetchBybitTickers(): Promise<Map<string, BybitTicker>> {
-  const cacheKey = 'bybit-tickers';
+/** Fetch option tickers from Bybit V5 (with cursor pagination) */
+export async function fetchBybitTickers(baseCoin: BybitBaseCoin = 'BTC'): Promise<Map<string, BybitTicker>> {
+  const cacheKey = `bybit-tickers-${baseCoin}`;
   const cached = getCached<Map<string, BybitTicker>>(cacheKey);
   if (cached) return cached;
 
@@ -93,7 +98,7 @@ export async function fetchBybitTickers(): Promise<Map<string, BybitTicker>> {
   let cursor = '';
 
   do {
-    const params: Record<string, string> = { category: 'option', baseCoin: 'BTC' };
+    const params: Record<string, string> = { category: 'option', baseCoin };
     if (cursor) params.cursor = cursor;
 
     const resp = await axios.get(`${BYBIT_API_BASE}/v5/market/tickers`, { params });
@@ -121,17 +126,18 @@ export async function fetchBybitTickers(): Promise<Map<string, BybitTicker>> {
   return tickers;
 }
 
-/** Fetch BTC spot price from Bybit */
-export async function fetchBybitSpotPrice(): Promise<number> {
-  const cacheKey = 'bybit-spot';
+/** Fetch spot/index price from Bybit for option-chain underlyings */
+export async function fetchBybitSpotPrice(baseCoin: BybitBaseCoin = 'BTC'): Promise<number> {
+  const cacheKey = `bybit-spot-${baseCoin}`;
   const cached = getCached<number>(cacheKey);
   if (cached) return cached;
 
   const resp = await axios.get(`${BYBIT_API_BASE}/v5/market/tickers`, {
-    params: { category: 'spot', symbol: 'BTCUSDT' },
+    params: { category: 'spot', symbol: SPOT_SYMBOLS[baseCoin] },
   });
 
-  const price = parseFloat(resp.data?.result?.list?.[0]?.lastPrice) || 0;
+  const row = resp.data?.result?.list?.[0] ?? {};
+  const price = parseFloat(row.usdIndexPrice) || parseFloat(row.lastPrice) || 0;
   setCache(cacheKey, price);
   return price;
 }
@@ -140,6 +146,7 @@ export async function fetchBybitSpotPrice(): Promise<number> {
 export function groupByExpiry(
   instruments: BybitInstrument[],
   tickers: Map<string, BybitTicker>,
+  baseCoin?: BybitBaseCoin,
 ): BybitOptionChain[] {
   const groups = new Map<number, BybitInstrument[]>();
 
@@ -169,6 +176,7 @@ export function groupByExpiry(
     insts.sort((a, b) => a.strike - b.strike);
 
     chains.push({
+      baseCoin,
       expiryLabel,
       expiryTimestamp: expiryTs,
       instruments: insts,
@@ -248,4 +256,3 @@ async function _fetchBybitCandles(
 
   return batches.flat();
 }
-

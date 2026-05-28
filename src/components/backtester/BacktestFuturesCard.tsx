@@ -18,6 +18,8 @@ import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import type { BacktestPosition, CryptoOption } from '../../types';
 
+const FUTURES_ASSETS: CryptoOption[] = ['BTC', 'ETH', 'SOL', 'XRP', 'XAUT', 'WTI', 'SI', 'SPY', 'META'];
+
 interface BacktestFuturesCardProps {
   id: string;
   position: BacktestPosition;
@@ -80,7 +82,7 @@ export function BacktestFuturesCard({
             row
             sx={{ mb: 2 }}
           >
-            {(['BTC', 'ETH', 'SOL', 'XRP'] as CryptoOption[]).map(c => (
+            {FUTURES_ASSETS.map(c => (
               <FormControlLabel key={c} value={c} control={<Radio size="small" />} label={c} />
             ))}
           </RadioGroup>

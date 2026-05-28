@@ -23,10 +23,20 @@ import {
 } from 'recharts';
 import type { BacktestResult } from './BacktesterTab';
 import type { OHLCCandle } from '../../api/binance';
-import type { BacktestPosition } from '../../types';
+import type { BacktestPosition, CryptoOption } from '../../types';
 
 // ─── Color palette ────────────────────────────────────────────────────────────
-const CRYPTO_COLORS: Record<string, string> = { BTC: '#F7931A', ETH: '#627EEA' };
+const CRYPTO_COLORS: Record<string, string> = {
+  BTC: '#F7931A',
+  ETH: '#627EEA',
+  SOL: '#14F195',
+  XRP: '#23292F',
+  XAUT: '#D4AF37',
+  WTI: '#0F766E',
+  SI: '#94A3B8',
+  SPY: '#16A34A',
+  META: '#1877F2',
+};
 const POLY_COLOR    = '#4A90D9'; // polymarket blue
 const OPT_COLOR     = '#FF8C00'; // orange (fallback)
 
@@ -39,7 +49,9 @@ const FUTURES_COLOR_LIGHT = '#6B7280'; // dark grey for light mode
 // Full crypto names for axis labels
 const CRYPTO_FULL_NAMES: Record<string, string> = {
   BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana', XRP: 'Ripple',
+  XAUT: 'Gold', WTI: 'WTI Crude Oil', SI: 'Silver', SPY: 'S&P 500 ETF', META: 'Meta',
 };
+const OVERLAY_ASSETS: CryptoOption[] = ['BTC', 'ETH', 'SOL', 'XRP', 'XAUT', 'WTI', 'SI', 'SPY', 'META'];
 
 // ─── Candle interval options ──────────────────────────────────────────────────
 const CANDLE_INTERVALS = ['1h', '4h', '1d'] as const;
@@ -119,8 +131,8 @@ interface BacktestChartProps {
   results: BacktestResult[];
   startTimestamp: number;
   endTimestamp: number;
-  cryptoOverlay: 'BTC' | 'ETH' | null;
-  onCryptoOverlayChange: (v: 'BTC' | 'ETH' | null) => void;
+  cryptoOverlay: CryptoOption | null;
+  onCryptoOverlayChange: (v: CryptoOption | null) => void;
   cryptoCandles: OHLCCandle[];
   candleInterval: string;
   onCandleIntervalChange: (interval: string) => void;
@@ -936,7 +948,7 @@ export function BacktestChart({
               variant={cryptoOverlay ? 'contained' : 'outlined'}
               endIcon={<ExpandMore />}
               onClick={e => setOverlayAnchor(e.currentTarget)}
-              color={cryptoOverlay === 'BTC' ? 'warning' : cryptoOverlay === 'ETH' ? 'primary' : 'inherit'}
+              color={cryptoOverlay === 'BTC' || cryptoOverlay === 'XAUT' ? 'warning' : cryptoOverlay === 'ETH' || cryptoOverlay === 'META' ? 'primary' : 'inherit'}
               sx={{ fontSize: 12, py: 0.25, px: 1.25, minWidth: 0 }}
             >
               {cryptoOverlay ? `${cryptoOverlay} Overlay` : 'Overlay'}
@@ -983,8 +995,9 @@ export function BacktestChart({
           </Box>
           <Menu anchorEl={overlayAnchor} open={Boolean(overlayAnchor)} onClose={() => setOverlayAnchor(null)}>
             <MenuItem onClick={() => { onCryptoOverlayChange(null); setOverlayAnchor(null); setRightAxisZoom(1); setRightAxisOffset(0); }}>None</MenuItem>
-            <MenuItem onClick={() => { onCryptoOverlayChange('BTC'); setOverlayAnchor(null); setRightAxisZoom(1); setRightAxisOffset(0); }}>BTC</MenuItem>
-            <MenuItem onClick={() => { onCryptoOverlayChange('ETH'); setOverlayAnchor(null); setRightAxisZoom(1); setRightAxisOffset(0); }}>ETH</MenuItem>
+            {OVERLAY_ASSETS.map(asset => (
+              <MenuItem key={asset} onClick={() => { onCryptoOverlayChange(asset); setOverlayAnchor(null); setRightAxisZoom(1); setRightAxisOffset(0); }}>{asset}</MenuItem>
+            ))}
           </Menu>
         </Box>
       </Box>
