@@ -1,7 +1,7 @@
 {
   "name": "hedging_tool",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Unified hedging platform: Position Builder, Position Finder, and Backtester for Polymarket + Bybit options",
   "type": "module",
   "scripts": {

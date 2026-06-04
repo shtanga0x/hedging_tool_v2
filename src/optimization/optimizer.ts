@@ -5,6 +5,13 @@ const YEAR_SEC = 365.25 * 24 * 3600;
 const NUM_GRID = 200;
 // Allow a small tolerance for floating-point near-zero negatives
 const FEASIBILITY_EPSILON = -0.001;
+const SECOND_ROUND_NOW_LOSS_LIMIT = -10;
+const MIDPOINT_WINDOW_FRACTION = 0.20;
+
+interface MidpointCandidate {
+  match: OptMatchResult;
+  distanceToMidpoint: number;
+}
 
 /**
  * Run optimization for all Polymarket strikes against a Bybit option chain.
@@ -24,6 +31,12 @@ const FEASIBILITY_EPSILON = -0.001;
  *
  * Feasibility: no negative combined P&L in ±20% around spot price.
  * Score: average P&L in ±1%, ±10%, ±20% ranges.
+ *
+ * If the strict round finds nothing for a strike, a second midpoint round is
+ * used. It keeps the same hedge sizing at the danger point, but only studies
+ * long option strikes between spot and the Polymarket strike, centered around
+ * their midpoint. It allows up to -10 in the current ±1% P&L bucket and then
+ * chooses the candidate with the strongest wider/expiry-style payoff.
  */
 export function runOptimization(
   polyMarkets: ParsedMarket[],
@@ -103,6 +116,9 @@ export function runOptimization(
     let best1: OptMatchResult | null = null;
     let best10: OptMatchResult | null = null;
     let best20: OptMatchResult | null = null;
+    const midpointCandidates: MidpointCandidate[] = [];
+    const midpointPrice = (spotPrice + K) / 2;
+    const midpointWindow = Math.max(Math.abs(spotPrice - K) * MIDPOINT_WINDOW_FRACTION, 1);
 
     const longCandidates = sameTypeCandidates.filter(
       inst => inst.symbol !== shortInst!.symbol,
@@ -214,11 +230,8 @@ export function runOptimization(
 
         if (combined < FEASIBILITY_EPSILON) {
           feasible = false;
-          break;
         }
       }
-
-      if (!feasible) continue;
 
       const avgInRange = (lo: number, hi: number): number => {
         let sum = 0;
@@ -255,11 +268,48 @@ export function runOptimization(
         tauPolyRem,
         tauBybitRem,
         tauEval,
+        searchRound: 'strict',
       };
 
-      if (best1  === null || avgPnl1  > best1.avgPnl1)   best1  = match;
-      if (best10 === null || avgPnl10 > best10.avgPnl10)  best10 = match;
-      if (best20 === null || avgPnl20 > best20.avgPnl20)  best20 = match;
+      if (feasible) {
+        if (best1  === null || avgPnl1  > best1.avgPnl1)   best1  = match;
+        if (best10 === null || avgPnl10 > best10.avgPnl10)  best10 = match;
+        if (best20 === null || avgPnl20 > best20.avgPnl20)  best20 = match;
+      } else {
+        const betweenSpotAndStrike =
+          inst.strike >= Math.min(spotPrice, K) &&
+          inst.strike <= Math.max(spotPrice, K);
+        if (betweenSpotAndStrike && avgPnl1 >= SECOND_ROUND_NOW_LOSS_LIMIT) {
+          midpointCandidates.push({
+            match: {
+              ...match,
+              searchRound: 'midpoint',
+              midpointPrice,
+              nowLossLimit: SECOND_ROUND_NOW_LOSS_LIMIT,
+            },
+            distanceToMidpoint: Math.abs(inst.strike - midpointPrice),
+          });
+        }
+      }
+    }
+
+    if (!best1 && !best10 && !best20 && midpointCandidates.length > 0) {
+      const closestDistance = Math.min(...midpointCandidates.map(c => c.distanceToMidpoint));
+      const candidatesNearMidpoint = midpointCandidates.filter(
+        c => c.distanceToMidpoint <= Math.max(midpointWindow, closestDistance + 1e-9),
+      );
+      const fallback = candidatesNearMidpoint
+        .sort((a, b) =>
+          b.match.avgPnl20 - a.match.avgPnl20 ||
+          a.distanceToMidpoint - b.distanceToMidpoint ||
+          b.match.avgPnl10 - a.match.avgPnl10
+        )[0]?.match ?? null;
+
+      if (fallback) {
+        best1 = fallback;
+        best10 = fallback;
+        best20 = fallback;
+      }
     }
 
     results.push({ market, isUpBarrier, polyIv, best1, best10, best20 });

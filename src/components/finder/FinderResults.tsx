@@ -101,6 +101,7 @@ export function FinderTable({ results, selectedMatch, onSelect }: FinderTablePro
         <TableBody>
           {results.map(r => {
             const hasAny = r.best1 || r.best10 || r.best20;
+            const isMidpointRound = Boolean(r.best1?.searchRound === 'midpoint' || r.best10?.searchRound === 'midpoint' || r.best20?.searchRound === 'midpoint');
             return (
               <TableRow key={r.market.id} sx={{ '& td': { borderBottom: '1px solid', borderColor: 'divider' } }}>
                 <TableCell>
@@ -110,6 +111,11 @@ export function FinderTable({ results, selectedMatch, onSelect }: FinderTablePro
                   <Typography variant="caption" color="text.secondary">
                     {(r.market.currentPrice * 100).toFixed(1)}c YES
                   </Typography>
+                  {isMidpointRound && (
+                    <Tooltip title="Second-round midpoint search: used only when the strict no-negative-P&L round finds no hedge. It allows up to -10 in the current ±1% bucket and prefers long option strikes near the midpoint between spot and this Polymarket strike." arrow>
+                      <Chip label="2nd round" size="small" color="warning" variant="outlined" sx={{ display: 'flex', width: 'fit-content', mt: 0.5, height: 20, fontSize: 10 }} />
+                    </Tooltip>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Chip label={r.isUpBarrier ? 'UP' : 'DOWN'} size="small" color={r.isUpBarrier ? 'primary' : 'secondary'} />
@@ -229,6 +235,11 @@ export function VizCard({
           sx={{ bgcolor: POLY_COLOR, color: '#fff' }}
         />
         <Chip label={optionType} size="small" variant="outlined" />
+        {match.searchRound === 'midpoint' && (
+          <Tooltip title={`Second-round midpoint fallback. Midpoint: $${(match.midpointPrice ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}; current ±1% limit: ${match.nowLossLimit ?? -10}.`} arrow>
+            <Chip label="2nd round" size="small" color="warning" variant="outlined" />
+          </Tooltip>
+        )}
         <Chip label={`exp ${formatPolyExpiry(market.endDate)}`} size="small" variant="outlined" />
         <Chip label={`● Long ${instrument.symbol} @ $${bybitAsk.toFixed(2)}`} size="small" sx={{ bgcolor: OPT_COLOR, color: '#fff' }} />
         <Chip label={`✕ Short ${shortInstrument.symbol} @ $${shortBid.toFixed(2)}`} size="small" sx={{ bgcolor: OPT_COLOR, color: '#fff' }} />

@@ -158,6 +158,9 @@ export interface OptMatchResult {
   tauPolyRem: number;    // Poly time-to-expiry remaining at evaluation (years)
   tauBybitRem: number;   // Bybit time-to-expiry remaining at evaluation (years)
   tauEval: number;       // Time until evaluation point from now (years)
+  searchRound?: 'strict' | 'midpoint';
+  midpointPrice?: number;
+  nowLossLimit?: number;
 }
 
 export interface StrikeOptResult {
