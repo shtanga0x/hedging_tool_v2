@@ -11,8 +11,6 @@ import {
   TextField,
   Button,
 } from '@mui/material';
-import { useTheme } from '@mui/material/styles';
-import { RangeCurtain } from '../shared/RangeCurtain';
 import Add from '@mui/icons-material/Add';
 import SaveAlt from '@mui/icons-material/SaveAlt';
 import Upload from '@mui/icons-material/Upload';
@@ -118,7 +116,6 @@ function getCardExpiryTs(card: PositionCard): number {
 }
 
 export function PositionBuilderTab({ transferPayload, onTransferConsumed }: PositionBuilderTabProps) {
-  const isDark = useTheme().palette.mode === 'dark';
   const [cards, setCards] = useState<PositionCard[]>([]);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [spotPrice, setSpotPrice] = useState(0);
@@ -827,43 +824,14 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               totalEntryCost={curves.totalEntryCost}
               polyEntryCost={curves.polyEntryCost}
               bybitEntryCost={curves.bybitEntryCost}
+              xRangeCurtain={spotPrice > 0 ? {
+                fullBounds: sliderBounds,
+                value: priceRange,
+                onChange: setPriceRange,
+                step: sliderStep,
+                formatValue: v => v.toFixed(0),
+              } : undefined}
             />
-
-            {/* Price range slider — moved below chart */}
-            {spotPrice > 0 && (
-              <Box sx={{ mt: 1.5 }}>
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'flex-end', mb: 0.5 }}>
-                  <TextField
-                    label="Min Price"
-                    size="small"
-                    type="number"
-                    value={priceRange[0]}
-                    onChange={e => setPriceRange([parseInt(e.target.value) || priceRange[0], priceRange[1]])}
-                    sx={{ width: 120 }}
-                    inputProps={{ step: 1000 }}
-                  />
-                  <TextField
-                    label="Max Price"
-                    size="small"
-                    type="number"
-                    value={priceRange[1]}
-                    onChange={e => setPriceRange([priceRange[0], parseInt(e.target.value) || priceRange[1]])}
-                    sx={{ width: 120 }}
-                    inputProps={{ step: 1000 }}
-                  />
-                </Box>
-                <Box sx={{ px: 2, pt: 0.5 }}>
-                  <RangeCurtain
-                    fullBounds={sliderBounds}
-                    value={priceRange}
-                    onChange={setPriceRange}
-                    isDark={isDark}
-                    step={sliderStep}
-                    formatValue={v => v.toFixed(0)}
-                  />
-                </Box>
-              </Box>
-            )}
           </>
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>

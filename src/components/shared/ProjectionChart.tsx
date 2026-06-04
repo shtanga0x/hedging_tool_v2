@@ -11,6 +11,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import type { ProjectionPoint } from '../../types';
+import { RangeCurtain } from './RangeCurtain';
 
 const GREEN = '#22C55E';
 const RED = '#EF4444';
@@ -42,6 +43,13 @@ interface ProjectionChartProps {
   polyAtBybitExpiryCurve?: ProjectionPoint[];
   polyEntryCost?: number;
   bybitEntryCost?: number;
+  xRangeCurtain?: {
+    fullBounds: [number, number];
+    value: [number, number];
+    onChange: (next: [number, number]) => void;
+    step?: number;
+    formatValue?: (v: number) => string;
+  };
 }
 
 interface ChartDataRow {
@@ -312,6 +320,7 @@ export function ProjectionChart({
   currentCryptoPrice,
   cryptoSymbol,
   totalEntryCost,
+  xRangeCurtain,
 }: ProjectionChartProps) {
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
@@ -598,54 +607,55 @@ export function ProjectionChart({
 
   return (
     <div ref={containerRef}>
-      <ResponsiveContainer width="100%" minHeight={600}>
-        <LineChart data={chartData} margin={CHART_MARGIN}>
-          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-          <XAxis
-            dataKey="cryptoPrice"
-            type="number"
-            domain={xDomain}
-            ticks={allTicks}
-            tick={renderTick}
-            stroke={axisColor}
-            tickLine={false}
-            interval={0}
-          />
-          <YAxis
-            yAxisId="left"
-            orientation="left"
-            domain={yDomain}
-            ticks={yTicks}
-            allowDataOverflow={true}
-            tickFormatter={formatYAxisPnl}
-            stroke={axisColor}
-            fontSize={14}
-            label={{ value: 'P&L ($)', angle: -90, position: 'insideLeft', style: { fill: axisColor, fontSize: 15 } }}
-          />
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            domain={yDomainPct}
-            ticks={yTicksPct}
-            allowDataOverflow={true}
-            tickFormatter={formatYAxisPct}
-            stroke={axisColor}
-            fontSize={14}
-            label={{ value: 'P&L (%)', angle: 90, position: 'insideRight', style: { fill: axisColor, fontSize: 15 } }}
-          />
-          <Tooltip content={renderTooltip} />
-          <ReferenceLine yAxisId="left" y={0} stroke={zeroLineColor} strokeDasharray="3 3" />
-          <ReferenceLine
-            yAxisId="left"
-            x={currentCryptoPrice}
-            stroke={refLineColor}
-            strokeDasharray="5 5"
-            label={{ value: `Spot: $${formatPrice(currentCryptoPrice)}`, position: 'top', fill: axisColor, fontSize: 14 }}
-          />
+      <div style={{ position: 'relative', minHeight: 600 }}>
+        <ResponsiveContainer width="100%" minHeight={600}>
+          <LineChart data={chartData} margin={CHART_MARGIN}>
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+            <XAxis
+              dataKey="cryptoPrice"
+              type="number"
+              domain={xDomain}
+              ticks={allTicks}
+              tick={renderTick}
+              stroke={axisColor}
+              tickLine={false}
+              interval={0}
+            />
+            <YAxis
+              yAxisId="left"
+              orientation="left"
+              domain={yDomain}
+              ticks={yTicks}
+              allowDataOverflow={true}
+              tickFormatter={formatYAxisPnl}
+              stroke={axisColor}
+              fontSize={14}
+              label={{ value: 'P&L ($)', angle: -90, position: 'insideLeft', style: { fill: axisColor, fontSize: 15 } }}
+            />
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              domain={yDomainPct}
+              ticks={yTicksPct}
+              allowDataOverflow={true}
+              tickFormatter={formatYAxisPct}
+              stroke={axisColor}
+              fontSize={14}
+              label={{ value: 'P&L (%)', angle: 90, position: 'insideRight', style: { fill: axisColor, fontSize: 15 } }}
+            />
+            <Tooltip content={renderTooltip} />
+            <ReferenceLine yAxisId="left" y={0} stroke={zeroLineColor} strokeDasharray="3 3" />
+            <ReferenceLine
+              yAxisId="left"
+              x={currentCryptoPrice}
+              stroke={refLineColor}
+              strokeDasharray="5 5"
+              label={{ value: `Spot: $${formatPrice(currentCryptoPrice)}`, position: 'top', fill: axisColor, fontSize: 14 }}
+            />
 
           {/* Invisible line for right Y-axis scale — use first visible combined curve so the
               right axis rescales correctly when curves are hidden */}
-          <Line
+            <Line
             yAxisId="right"
             type="linear"
             dataKey={(() => {
@@ -662,7 +672,7 @@ export function ProjectionChart({
             tooltipType="none"
           />
           {/* Combined curves: green/red split */}
-          {combinedLabels.map((label, i) => [
+            {combinedLabels.map((label, i) => [
             <Line
               key={`${label}__pos`}
               yAxisId="left"
@@ -696,7 +706,7 @@ export function ProjectionChart({
           ])}
 
           {/* Poly overlay: blue solid=Now, dashed=Expiry */}
-          {hasPolyOverlay && (
+            {hasPolyOverlay && (
             <>
               <Line
                 yAxisId="left" type="linear" dataKey={POLY_NOW} name={POLY_NOW}
@@ -722,7 +732,7 @@ export function ProjectionChart({
           )}
 
           {/* Bybit overlay: orange solid=Now, dashed=Expiry */}
-          {hasBybitOverlay && (
+            {hasBybitOverlay && (
             <>
               <Line
                 yAxisId="left" type="linear" dataKey={BYBIT_NOW} name={BYBIT_NOW}
@@ -740,16 +750,38 @@ export function ProjectionChart({
           )}
 
           {/* Futures overlay: grey dashed (time-independent — same at all snapshots) */}
-          {hasFuturesOverlay && (
+            {hasFuturesOverlay && (
             <Line
               yAxisId="left" type="linear" dataKey={FUTURES_LINE} name={FUTURES_LINE}
               stroke={futuresColor} strokeWidth={2} strokeDasharray="12 6" dot={false} activeDot={ACTIVE_DOT}
               strokeOpacity={0.9}
               legendType="none"
             />
-          )}
-        </LineChart>
-      </ResponsiveContainer>
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+
+        {xRangeCurtain && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 72,
+              right: 72,
+              bottom: 43,
+              zIndex: 4,
+            }}
+          >
+            <RangeCurtain
+              fullBounds={xRangeCurtain.fullBounds}
+              value={xRangeCurtain.value}
+              onChange={xRangeCurtain.onChange}
+              isDark={isDark}
+              step={xRangeCurtain.step}
+              formatValue={xRangeCurtain.formatValue}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Custom legend */}
       <div style={{ display: 'flex', justifyContent: 'center', gap: 20, paddingTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
