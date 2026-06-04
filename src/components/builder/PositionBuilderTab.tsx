@@ -236,8 +236,17 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     }
 
     if (newCards.length > 0) {
-      setCards(prev => [...prev, ...newCards]);
-      if (transferPayload.spotPrice > 0) setSpotPrice(transferPayload.spotPrice);
+      setCards(newCards);
+      setPrimaryCrypto(transferPayload.crypto);
+      setPrimaryOptionType(transferPayload.optionType);
+      if (!transferPayload.bybitChainData) setBybitChain(null);
+      if (transferPayload.spotPrice > 0) {
+        setSpotPrice(transferPayload.spotPrice);
+        setPriceRange([
+          roundToNice(transferPayload.spotPrice * 0.6, 'down'),
+          roundToNice(transferPayload.spotPrice * 1.4, 'up'),
+        ]);
+      }
     }
     onTransferConsumed();
   }, [transferPayload]); // eslint-disable-line react-hooks/exhaustive-deps
