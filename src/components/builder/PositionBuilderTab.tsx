@@ -65,6 +65,31 @@ function roundToNice(value: number, direction: 'down' | 'up'): number {
     : Math.ceil(value / magnitude) * magnitude;
 }
 
+const INITIAL_PRICE_RANGE: [number, number] = [60000, 120000];
+
+function buildPriceRange(values: number[], fallbackSpot?: number): [number, number] {
+  const clean = values.filter(v => Number.isFinite(v) && v > 0);
+  if (clean.length === 0) return INITIAL_PRICE_RANGE;
+
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  const anchor = fallbackSpot && fallbackSpot > 0 ? fallbackSpot : Math.max(Math.abs(max), 1);
+  const span = Math.max(max - min, anchor * 0.4, 1);
+  const pad = Math.max(span * 0.25, anchor * 0.1, 1);
+  const lower = roundToNice(Math.max(0, min - pad), 'down');
+  const upper = roundToNice(max + pad, 'up');
+
+  return upper > lower ? [lower, upper] : [Math.max(0, lower - 1), upper + 1];
+}
+
+function rangeContainsPrices(range: [number, number], values: number[]): boolean {
+  const clean = values.filter(v => Number.isFinite(v) && v > 0);
+  if (clean.length === 0) return true;
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  return range[0] <= min && range[1] >= max;
+}
+
 /** Format a crypto price with precision appropriate to its magnitude. */
 function formatPrice(price: number): string {
   const abs = Math.abs(price);
@@ -122,7 +147,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const [primaryCrypto, setPrimaryCrypto] = useState<CryptoOption | null>(null);
   const [primaryOptionType, setPrimaryOptionType] = useState<OptionType>('above');
   const [bybitChain, setBybitChain] = useState<BybitChainType | null>(null);
-  const [priceRange, setPriceRange] = useState<[number, number]>([60000, 120000]);
+  const [priceRange, setPriceRange] = useState<[number, number]>(INITIAL_PRICE_RANGE);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const nowSec = Math.floor(Date.now() / 1000);
@@ -169,20 +194,27 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const groupExpiryLabel = groupExpiryTs > 0
     ? new Date(groupExpiryTs * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : null;
+  const lastAutoRangeAssetRef = useRef<CryptoOption | null>(null);
 
   // Load spot price when crypto is detected or on refresh
   useEffect(() => {
     if (!primaryCrypto) return;
+    let cancelled = false;
+    const asset = primaryCrypto;
     fetchCurrentPrice(primaryCrypto)
       .then(price => {
-        if (price > 0) {
+        if (!cancelled && price > 0) {
           setSpotPrice(price);
-          if (priceRange[0] === 60000 && priceRange[1] === 120000) {
-            setPriceRange([roundToNice(price * 0.6, 'down'), roundToNice(price * 1.4, 'up')]);
+          if (lastAutoRangeAssetRef.current !== asset) {
+            setPriceRange(buildPriceRange([price], price));
+            lastAutoRangeAssetRef.current = asset;
           }
         }
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [primaryCrypto, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle transfer payload from Position Finder
@@ -239,10 +271,13 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
       if (!transferPayload.bybitChainData) setBybitChain(null);
       if (transferPayload.spotPrice > 0) {
         setSpotPrice(transferPayload.spotPrice);
-        setPriceRange([
-          roundToNice(transferPayload.spotPrice * 0.6, 'down'),
-          roundToNice(transferPayload.spotPrice * 1.4, 'up'),
-        ]);
+        setPriceRange(buildPriceRange([
+          transferPayload.spotPrice,
+          ...transferPayload.polySelections
+            .map(sel => transferPayload.polyMarkets.find(m => m.id === sel.marketId)?.strikePrice ?? 0),
+          ...transferPayload.bybitSelections.map(sel => sel.strike),
+        ], transferPayload.spotPrice));
+        lastAutoRangeAssetRef.current = transferPayload.crypto;
       }
     }
     onTransferConsumed();
@@ -268,13 +303,23 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const handleUpdateCard = useCallback(<T extends PolymarketCardData | OptionsCardData | FuturesCardData>(id: string, newData: T) => {
     setCards(prev => prev.map(c => c.id === id ? { ...c, data: newData } : c));
 
-    // Update primary state when first polymarket card loads an event
+    // Update primary state when a Polymarket event loads or changes.
+    if ('markets' in newData && 'crypto' in newData) {
+      const polyData = newData as PolymarketCardData;
+      if (polyData.crypto && polyData.crypto !== primaryCrypto) {
+        setPrimaryCrypto(polyData.crypto);
+      }
+      if (polyData.optionType !== primaryOptionType) {
+        setPrimaryOptionType(polyData.optionType);
+      }
+    }
+
     // Detect crypto from futures symbol updates to trigger spot price fetch
     if (!primaryCrypto && 'symbol' in newData && typeof (newData as { symbol?: unknown }).symbol === 'string') {
       const crypto = detectCryptoFromSymbol((newData as FuturesCardData).symbol);
       if (crypto) setPrimaryCrypto(crypto);
     }
-  }, [primaryCrypto]);
+  }, [primaryCrypto, primaryOptionType]);
 
   const handleRemoveCard = useCallback((id: string) => {
     setCards(prev => prev.filter(c => c.id !== id));
@@ -683,6 +728,28 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
       .filter(fp => fp.entryPrice > 0 && fp.size !== 0);
   }, [cards, spotPrice]);
 
+  const selectedPriceAnchors = useMemo(() => {
+    const anchors = spotPrice > 0 ? [spotPrice] : [];
+    for (const pos of polyPositions) anchors.push(pos.strikePrice);
+    for (const pos of bybitPositions) anchors.push(pos.strike);
+    for (const pos of futuresPositions) anchors.push(pos.entryPrice);
+    return anchors.filter(v => Number.isFinite(v) && v > 0);
+  }, [spotPrice, polyPositions, bybitPositions, futuresPositions]);
+
+  const selectedPriceAnchorKey = useMemo(
+    () => selectedPriceAnchors.map(v => v.toFixed(6)).join('|'),
+    [selectedPriceAnchors],
+  );
+
+  useEffect(() => {
+    if (spotPrice <= 0 || selectedPriceAnchors.length <= 1) return;
+    setPriceRange(prev => (
+      rangeContainsPrices(prev, selectedPriceAnchors)
+        ? prev
+        : buildPriceRange(selectedPriceAnchors, spotPrice)
+    ));
+  }, [spotPrice, selectedPriceAnchorKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Get primary poly expiry
   const polyExpiryTs = useMemo(() => {
     let earliest = Infinity;
@@ -763,7 +830,14 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 size="small"
                 type="number"
                 value={spotPrice || ''}
-                onChange={e => setSpotPrice(parseFloat(e.target.value) || 0)}
+                onChange={e => {
+                  const nextSpot = parseFloat(e.target.value) || 0;
+                  setSpotPrice(nextSpot);
+                  if (nextSpot > 0) {
+                    setPriceRange(buildPriceRange([nextSpot], nextSpot));
+                    if (primaryCrypto) lastAutoRangeAssetRef.current = primaryCrypto;
+                  }
+                }}
                 inputProps={{ min: 0, step: 'any' }}
                 sx={{ width: 160 }}
               />

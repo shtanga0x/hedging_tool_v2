@@ -31,6 +31,14 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/stooq/, ''),
       },
+      '/api/yahoo': {
+        target: 'https://query1.finance.yahoo.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/yahoo/, ''),
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+        },
+      },
       '/api/deribit': {
         target: 'https://www.deribit.com',
         changeOrigin: true,

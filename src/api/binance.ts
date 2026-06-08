@@ -3,7 +3,7 @@ import type { CryptoOption } from '../types';
 import { API_CONFIG } from './config';
 
 const BINANCE_API_BASE = 'https://api.binance.com/api/v3';
-const { BYBIT_API_BASE, STOOQ_API_BASE } = API_CONFIG;
+const { BYBIT_API_BASE, STOOQ_API_BASE, YAHOO_API_BASE } = API_CONFIG;
 
 const CRYPTO_SYMBOLS: Partial<Record<CryptoOption, string>> = {
   BTC: 'BTCUSDT',
@@ -21,6 +21,14 @@ const STOOQ_SYMBOLS: Partial<Record<CryptoOption, { symbol: string; scale?: numb
   SI: { symbol: 'si.f', scale: 0.01 },
   SPY: { symbol: 'spy.us' },
   META: { symbol: 'meta.us' },
+};
+
+const YAHOO_SYMBOLS: Partial<Record<CryptoOption, string>> = {
+  WTI: 'CL=F',
+  SI: 'SI=F',
+  SPY: 'SPY',
+  META: 'META',
+  XAUT: 'GC=F',
 };
 
 export interface OHLCCandle {
@@ -78,6 +86,23 @@ async function fetchStooqLatest(asset: CryptoOption): Promise<number> {
   return price > 0 ? price : 0;
 }
 
+async function fetchYahooLatest(asset: CryptoOption): Promise<number> {
+  const symbol = YAHOO_SYMBOLS[asset];
+  if (!symbol) return 0;
+  const response = await axios.get(`${YAHOO_API_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}`, {
+    params: { range: '5d', interval: '1d' },
+    responseType: 'json',
+  });
+  const meta = response.data?.chart?.result?.[0]?.meta ?? {};
+  const candidates = [
+    parseFloat(String(meta.regularMarketPrice ?? '')),
+    parseFloat(String(meta.previousClose ?? '')),
+    parseFloat(String(meta.chartPreviousClose ?? '')),
+  ];
+  const price = candidates.find(v => Number.isFinite(v) && v > 0) ?? 0;
+  return price > 0 ? price : 0;
+}
+
 async function fetchStooqCandles(asset: CryptoOption, startTime: number, endTime: number): Promise<OHLCCandle[]> {
   const config = STOOQ_SYMBOLS[asset];
   if (!config) return [];
@@ -102,12 +127,37 @@ async function fetchStooqCandles(asset: CryptoOption, startTime: number, endTime
     .filter(c => c.t > 0 && [c.o, c.h, c.l, c.c].every(Number.isFinite));
 }
 
+async function fetchYahooCandles(asset: CryptoOption, startTime: number, endTime: number): Promise<OHLCCandle[]> {
+  const symbol = YAHOO_SYMBOLS[asset];
+  if (!symbol) return [];
+  const response = await axios.get(`${YAHOO_API_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}`, {
+    params: {
+      period1: startTime,
+      period2: endTime,
+      interval: '1d',
+    },
+    responseType: 'json',
+  });
+  const result = response.data?.chart?.result?.[0];
+  const timestamps: number[] = result?.timestamp ?? [];
+  const quote = result?.indicators?.quote?.[0] ?? {};
+  return timestamps.map((t, i) => ({
+    t,
+    o: Number(quote.open?.[i]),
+    h: Number(quote.high?.[i]),
+    l: Number(quote.low?.[i]),
+    c: Number(quote.close?.[i]),
+  })).filter(c => c.t > 0 && [c.o, c.h, c.l, c.c].every(v => Number.isFinite(v) && v > 0));
+}
+
 /** Fetch current spot/reference price for a supported asset */
 export async function fetchCurrentPrice(crypto: CryptoOption): Promise<number> {
   const symbol = CRYPTO_SYMBOLS[crypto];
   if (!symbol) {
     const bybitSpot = await fetchBybitSpot(crypto);
     if (bybitSpot > 0) return bybitSpot;
+    const yahooSpot = await fetchYahooLatest(crypto);
+    if (yahooSpot > 0) return yahooSpot;
     const stooqSpot = await fetchStooqLatest(crypto);
     if (stooqSpot > 0) return stooqSpot;
     return 0;
@@ -126,7 +176,11 @@ export async function fetchCryptoCandles(
   interval: string = '1h'
 ): Promise<OHLCCandle[]> {
   const symbol = CRYPTO_SYMBOLS[crypto];
-  if (!symbol) return fetchStooqCandles(crypto, startTime, endTime);
+  if (!symbol) {
+    const yahooCandles = await fetchYahooCandles(crypto, startTime, endTime);
+    if (yahooCandles.length > 0) return yahooCandles;
+    return fetchStooqCandles(crypto, startTime, endTime);
+  }
   const allCandles: OHLCCandle[] = [];
   let currentStartTime = startTime * 1000;
   const endTimeMs = endTime * 1000;
@@ -160,7 +214,8 @@ export async function fetchCryptoPriceHistory(
 ): Promise<{ t: number; p: number }[]> {
   const symbol = CRYPTO_SYMBOLS[crypto];
   if (!symbol) {
-    const candles = await fetchStooqCandles(crypto, startTime, endTime);
+    const yahooCandles = await fetchYahooCandles(crypto, startTime, endTime);
+    const candles = yahooCandles.length > 0 ? yahooCandles : await fetchStooqCandles(crypto, startTime, endTime);
     return candles.map(c => ({ t: c.t, p: c.c }));
   }
   const allKlines: { t: number; p: number }[] = [];

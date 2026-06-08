@@ -6,6 +6,7 @@
  *   /api/clob/*    -> https://clob.polymarket.com/*
  *   /api/bybit/*   -> https://api.bybit.com/*
  *   /api/stooq/*    -> https://stooq.com/*
+ *   /api/yahoo/*    -> https://query1.finance.yahoo.com/*
  *   /api/deribit/* -> https://www.deribit.com/*
  *
  * Deribit 429 handling: retries via HTTP-CONNECT proxy rotation.
@@ -63,6 +64,7 @@ const ROUTES = {
   '/api/clob':    'https://clob.polymarket.com',
   '/api/bybit':   'https://api.bybit.com',
   '/api/stooq':   'https://stooq.com',
+  '/api/yahoo':   'https://query1.finance.yahoo.com',
   '/api/deribit': 'https://www.deribit.com',
 };
 
@@ -217,6 +219,7 @@ async function handleRequest(request, ctx) {
   targetUrl.search = url.search;
 
   const isDeribit = prefix === '/api/deribit';
+  const isYahoo = prefix === '/api/yahoo';
 
   // ── Cloudflare Cache API (Deribit GET responses only) ─────────────────────
   const cache = caches.default;
@@ -234,9 +237,15 @@ async function handleRequest(request, ctx) {
   }
 
   // ── Forward request ───────────────────────────────────────────────────────
+  const forwardHeaders = new Headers(request.headers);
+  if (isYahoo) {
+    forwardHeaders.set('User-Agent', 'Mozilla/5.0');
+    forwardHeaders.set('Accept', 'application/json,text/plain,*/*');
+  }
+
   const forwardReq = new Request(targetUrl.toString(), {
     method: request.method,
-    headers: request.headers,
+    headers: forwardHeaders,
     body: request.body,
     redirect: 'follow',
   });
