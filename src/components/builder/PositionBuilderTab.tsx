@@ -90,6 +90,10 @@ function rangeContainsPrices(range: [number, number], values: number[]): boolean
   return range[0] <= min && range[1] >= max;
 }
 
+function formatSpotInput(price: number): string {
+  return Number.isFinite(price) && price > 0 ? String(Number(price.toFixed(8))) : '';
+}
+
 /** Format a crypto price with precision appropriate to its magnitude. */
 function formatPrice(price: number): string {
   const abs = Math.abs(price);
@@ -144,6 +148,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const [cards, setCards] = useState<PositionCard[]>([]);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [spotPrice, setSpotPrice] = useState(0);
+  const [spotInputValue, setSpotInputValue] = useState('');
   const [primaryCrypto, setPrimaryCrypto] = useState<CryptoOption | null>(null);
   const [primaryOptionType, setPrimaryOptionType] = useState<OptionType>('above');
   const [bybitChain, setBybitChain] = useState<BybitChainType | null>(null);
@@ -205,6 +210,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
       .then(price => {
         if (!cancelled && price > 0) {
           setSpotPrice(price);
+          setSpotInputValue(formatSpotInput(price));
           if (lastAutoRangeAssetRef.current !== asset) {
             setPriceRange(buildPriceRange([price], price));
             lastAutoRangeAssetRef.current = asset;
@@ -271,6 +277,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
       if (!transferPayload.bybitChainData) setBybitChain(null);
       if (transferPayload.spotPrice > 0) {
         setSpotPrice(transferPayload.spotPrice);
+        setSpotInputValue(formatSpotInput(transferPayload.spotPrice));
         setPriceRange(buildPriceRange([
           transferPayload.spotPrice,
           ...transferPayload.polySelections
@@ -501,7 +508,10 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
           }
 
           // Restore spotPrice and priceRange if saved
-          if (parsed.spotPrice > 0) setSpotPrice(parsed.spotPrice);
+          if (parsed.spotPrice > 0) {
+            setSpotPrice(parsed.spotPrice);
+            setSpotInputValue(formatSpotInput(parsed.spotPrice));
+          }
           if (Array.isArray(parsed.priceRange) && parsed.priceRange.length === 2) {
             setPriceRange(parsed.priceRange as [number, number]);
           }
@@ -602,7 +612,10 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
 
           if (newCards.length > 0) {
             setCards(newCards);
-            if (v1.spotPrice > 0) setSpotPrice(v1.spotPrice);
+            if (v1.spotPrice > 0) {
+              setSpotPrice(v1.spotPrice);
+              setSpotInputValue(formatSpotInput(v1.spotPrice));
+            }
             // Only restore saved price range if options haven't expired — expired files
             // have stale ranges that no longer match the live spot price.
             const optionsExpired = v1.bybitChain?.expiryTimestamp && v1.bybitChain.expiryTimestamp < Date.now();
@@ -794,7 +807,18 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
     return Math.pow(10, Math.floor(Math.log10(range)) - 1);
   }, [sliderBounds]);
 
+  const hasSelectedRawPositions = useMemo(() => cards.some(card => {
+    if (card.kind === 'polymarket') return (card.data as PolymarketCardData).selections.length > 0;
+    if (card.kind === 'options') return (card.data as OptionsCardData).selectedOptions.length > 0;
+    if (card.kind === 'futures') {
+      const data = card.data as FuturesCardData;
+      return data.size !== 0;
+    }
+    return false;
+  }), [cards]);
+
   const hasPositions = polyPositions.length > 0 || bybitPositions.length > 0 || futuresPositions.length > 0;
+  const showPortfolioPanel = hasPositions || hasSelectedRawPositions;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -821,7 +845,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
       {/* Chart */}
       <Paper sx={{ p: 2 }}>
         <div ref={chartRef}>
-        {hasPositions ? (
+        {showPortfolioPanel ? (
           <>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
               <Typography variant="h6" fontWeight={600}>Portfolio P&L</Typography>
@@ -829,11 +853,17 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
                 label={`${cryptoSymbol} spot`}
                 size="small"
                 type="number"
-                value={spotPrice || ''}
+                value={spotInputValue}
                 onChange={e => {
-                  const nextSpot = parseFloat(e.target.value) || 0;
-                  setSpotPrice(nextSpot);
-                  if (nextSpot > 0) {
+                  const raw = e.target.value;
+                  setSpotInputValue(raw);
+                  if (raw.trim() === '') {
+                    setSpotPrice(0);
+                    return;
+                  }
+                  const nextSpot = parseFloat(raw);
+                  if (Number.isFinite(nextSpot) && nextSpot > 0) {
+                    setSpotPrice(nextSpot);
                     setPriceRange(buildPriceRange([nextSpot], nextSpot));
                     if (primaryCrypto) lastAutoRangeAssetRef.current = primaryCrypto;
                   }
@@ -849,7 +879,7 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
             </Box>
 
             {/* Selected position chips — similar to position finder */}
-            {(polyPositions.length > 0 || bybitPositions.length > 0 || cards.some(c => c.kind === 'futures')) && (
+            {hasPositions && (
               <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1.5 }}>
                 {polyPositions.map((pos, i) => (
                   <Chip
@@ -884,28 +914,34 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               </Box>
             )}
 
-            <ProjectionChart
-              combinedCurves={curves.combinedCurves}
-              combinedLabels={curves.combinedLabels}
-              polyNowCurve={curves.polyNowCurve}
-              polyExpiryCurve={curves.polyExpiryCurve}
-              bybitNowCurve={curves.bybitNowCurve}
-              bybitExpiryCurve={curves.bybitExpiryCurve}
-              polyAtBybitExpiryCurve={curves.polyAtBybitExpiryCurve}
-              futuresNowCurve={curves.futuresNowCurve}
-              currentCryptoPrice={spotPrice}
-              cryptoSymbol={cryptoSymbol}
-              totalEntryCost={curves.totalEntryCost}
-              polyEntryCost={curves.polyEntryCost}
-              bybitEntryCost={curves.bybitEntryCost}
-              xRangeCurtain={spotPrice > 0 ? {
-                fullBounds: sliderBounds,
-                value: priceRange,
-                onChange: setPriceRange,
-                step: sliderStep,
-                formatValue: v => v.toFixed(0),
-              } : undefined}
-            />
+            {hasPositions ? (
+              <ProjectionChart
+                combinedCurves={curves.combinedCurves}
+                combinedLabels={curves.combinedLabels}
+                polyNowCurve={curves.polyNowCurve}
+                polyExpiryCurve={curves.polyExpiryCurve}
+                bybitNowCurve={curves.bybitNowCurve}
+                bybitExpiryCurve={curves.bybitExpiryCurve}
+                polyAtBybitExpiryCurve={curves.polyAtBybitExpiryCurve}
+                futuresNowCurve={curves.futuresNowCurve}
+                currentCryptoPrice={spotPrice}
+                cryptoSymbol={cryptoSymbol}
+                totalEntryCost={curves.totalEntryCost}
+                polyEntryCost={curves.polyEntryCost}
+                bybitEntryCost={curves.bybitEntryCost}
+                xRangeCurtain={spotPrice > 0 ? {
+                  fullBounds: sliderBounds,
+                  value: priceRange,
+                  onChange: setPriceRange,
+                  step: sliderStep,
+                  formatValue: v => v.toFixed(0),
+                } : undefined}
+              />
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+                Spot price required for P&L projection
+              </Typography>
+            )}
           </>
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>

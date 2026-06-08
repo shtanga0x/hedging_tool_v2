@@ -21,6 +21,7 @@ export const API_CONFIG = {
   BYBIT_API_BASE: isDev ? '/api/bybit' : `${WORKER_URL}/api/bybit`,
   STOOQ_API_BASE: isDev ? '/api/stooq' : `${WORKER_URL}/api/stooq`,
   YAHOO_API_BASE: isDev ? '/api/yahoo' : `${WORKER_URL}/api/yahoo`,
+  PYTH_API_BASE: isDev ? '/api/pyth' : `${WORKER_URL}/api/pyth`,
   // get_tradingview_chart_data does NOT support browser CORS — must go through Worker.
   // All other Deribit endpoints (DVOL, instruments) support CORS and are called directly.
   DERIBIT_API_BASE: isDev ? '/api/deribit' : `${WORKER_URL}/api/deribit`,

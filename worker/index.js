@@ -7,6 +7,7 @@
  *   /api/bybit/*   -> https://api.bybit.com/*
  *   /api/stooq/*    -> https://stooq.com/*
  *   /api/yahoo/*    -> https://query1.finance.yahoo.com/*
+ *   /api/pyth/*     -> https://hermes.pyth.network/*
  *   /api/deribit/* -> https://www.deribit.com/*
  *
  * Deribit 429 handling: retries via HTTP-CONNECT proxy rotation.
@@ -65,6 +66,7 @@ const ROUTES = {
   '/api/bybit':   'https://api.bybit.com',
   '/api/stooq':   'https://stooq.com',
   '/api/yahoo':   'https://query1.finance.yahoo.com',
+  '/api/pyth':    'https://hermes.pyth.network',
   '/api/deribit': 'https://www.deribit.com',
 };
 

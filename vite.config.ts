@@ -39,6 +39,11 @@ export default defineConfig({
           'User-Agent': 'Mozilla/5.0',
         },
       },
+      '/api/pyth': {
+        target: 'https://hermes.pyth.network',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/pyth/, ''),
+      },
       '/api/deribit': {
         target: 'https://www.deribit.com',
         changeOrigin: true,

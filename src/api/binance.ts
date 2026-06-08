@@ -3,7 +3,7 @@ import type { CryptoOption } from '../types';
 import { API_CONFIG } from './config';
 
 const BINANCE_API_BASE = 'https://api.binance.com/api/v3';
-const { BYBIT_API_BASE, STOOQ_API_BASE, YAHOO_API_BASE } = API_CONFIG;
+const { BYBIT_API_BASE, STOOQ_API_BASE, YAHOO_API_BASE, PYTH_API_BASE } = API_CONFIG;
 
 const CRYPTO_SYMBOLS: Partial<Record<CryptoOption, string>> = {
   BTC: 'BTCUSDT',
@@ -30,6 +30,15 @@ const YAHOO_SYMBOLS: Partial<Record<CryptoOption, string>> = {
   META: 'META',
   XAUT: 'GC=F',
 };
+
+interface PythFeed {
+  id: string;
+  attributes?: {
+    base?: string;
+    description?: string;
+    display_symbol?: string;
+  };
+}
 
 export interface OHLCCandle {
   t: number; // Unix seconds (candle open time)
@@ -103,6 +112,57 @@ async function fetchYahooLatest(asset: CryptoOption): Promise<number> {
   return price > 0 ? price : 0;
 }
 
+function parsePythWtiLastTradeDate(description: string): number {
+  const match = description.match(/\b(\d{1,2})\s+([A-Z]+)\s+(\d{4})\b/);
+  if (!match) return 0;
+  const [, dayRaw, monthRaw, yearRaw] = match;
+  const monthIndex = [
+    'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+    'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER',
+  ].indexOf(monthRaw);
+  if (monthIndex < 0) return 0;
+  return Date.UTC(Number(yearRaw), monthIndex, Number(dayRaw), 22, 0, 0);
+}
+
+async function fetchPythWtiLatest(): Promise<number> {
+  const feedsResponse = await axios.get(`${PYTH_API_BASE}/v2/price_feeds`, {
+    params: { query: 'WTI' },
+    responseType: 'json',
+  });
+  const feeds = (feedsResponse.data as PythFeed[])
+    .map(feed => {
+      const description = feed.attributes?.description ?? '';
+      return {
+        id: feed.id,
+        base: feed.attributes?.base ?? '',
+        description,
+        lastTradeMs: parsePythWtiLastTradeDate(description),
+      };
+    })
+    .filter(feed =>
+      feed.id &&
+      /^WTI[A-Z]\d$/.test(feed.base) &&
+      feed.lastTradeMs > 0 &&
+      !/deprecated/i.test(feed.description)
+    )
+    .sort((a, b) => a.lastTradeMs - b.lastTradeMs);
+
+  const rollBufferMs = 3 * 24 * 3600 * 1000;
+  const activeFeed = feeds.find(feed => feed.lastTradeMs > Date.now() + rollBufferMs) ?? feeds[0];
+  if (!activeFeed) return 0;
+
+  const priceResponse = await axios.get(`${PYTH_API_BASE}/v2/updates/price/latest`, {
+    params: { 'ids[]': activeFeed.id },
+    responseType: 'json',
+  });
+  const price = priceResponse.data?.parsed?.[0]?.price;
+  const raw = Number(price?.price);
+  const expo = Number(price?.expo);
+  if (!Number.isFinite(raw) || !Number.isFinite(expo)) return 0;
+  const value = raw * Math.pow(10, expo);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 async function fetchStooqCandles(asset: CryptoOption, startTime: number, endTime: number): Promise<OHLCCandle[]> {
   const config = STOOQ_SYMBOLS[asset];
   if (!config) return [];
@@ -156,6 +216,10 @@ export async function fetchCurrentPrice(crypto: CryptoOption): Promise<number> {
   if (!symbol) {
     const bybitSpot = await fetchBybitSpot(crypto);
     if (bybitSpot > 0) return bybitSpot;
+    if (crypto === 'WTI') {
+      const pythSpot = await fetchPythWtiLatest();
+      if (pythSpot > 0) return pythSpot;
+    }
     const yahooSpot = await fetchYahooLatest(crypto);
     if (yahooSpot > 0) return yahooSpot;
     const stooqSpot = await fetchStooqLatest(crypto);
