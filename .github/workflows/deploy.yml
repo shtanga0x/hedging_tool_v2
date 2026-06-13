@@ -17,6 +17,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Presence of this secret gates the R2 sync step below.
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +38,21 @@ jobs:
         env:
           GITHUB_ACTIONS: true
           VITE_WORKER_URL: ${{ secrets.VITE_WORKER_URL }}
+
+      # app.shtanga.xyz is served (gated) from the R2 bucket `shtanga-app`, not
+      # GitHub Pages, so mirror each build into R2. Skips until the R2 secrets
+      # exist and never blocks the Pages deploy. (The app-gate Worker sets
+      # content-types by extension, so a plain sync is fine.)
+      - name: Sync build to R2 (app.shtanga.xyz)
+        if: ${{ env.R2_ACCESS_KEY_ID != '' }}
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 sync ./dist "s3://shtanga-app" --delete \
+            --endpoint-url https://2f2062b6da2ebc546b3bcae5b5719740.r2.cloudflarestorage.com
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
