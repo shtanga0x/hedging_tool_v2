@@ -1,5 +1,11 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { toBlob as elementToBlob } from 'html-to-image';
+import {
+  buildSnapshot,
+  parseSnapshot,
+  downloadJson,
+  downloadElementPng,
+  readJsonFile,
+} from '../../io/snapshot';
 import {
   Box,
   Paper,
@@ -29,6 +35,9 @@ import type {
   BybitInstrument,
   BybitTicker,
   Side,
+  PositionCard,
+  PolymarketCardData,
+  OptionsCardData,
 } from '../../types';
 import { PolymarketSearch } from '../shared/PolymarketSearch';
 import { BybitOptionChain } from '../shared/BybitOptionChain';
@@ -67,7 +76,10 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartSectionRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Quantized to the minute so its value is stable across rapid re-renders
+  // (keeps memo/callback deps from invalidating every render) while still
+  // advancing over a long session. Minute granularity is negligible vs. tau.
+  const nowSec = Math.floor(Date.now() / 60000) * 60;
 
   // Refs to hold latest values for use inside stable callbacks (avoids stale closures)
   const pendingAutoRunRef = useRef(false);
@@ -217,36 +229,31 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     }, 50);
   }, []);
 
-  // Load polymarket event + option expiry from a builder_full_save JSON
+  // Load polymarket event + option expiry from a snapshot JSON
   const handleLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const input = e.target as HTMLInputElement;
-    const reader = new FileReader();
-    reader.onerror = () => setError('Failed to read file');
-    reader.onload = (ev) => {
-      input.value = '';
-      const text = ev.target?.result;
-      if (typeof text !== 'string') { setError('Failed to read file'); return; }
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed.kind !== 'builder_full_save' || !Array.isArray(parsed.cards)) {
-          setError('Invalid file format'); return;
-        }
-        const polyCard = parsed.cards.find((c: { kind: string }) => c.kind === 'polymarket');
-        const optCard  = parsed.cards.find((c: { kind: string }) => c.kind === 'options');
-        if (!polyCard?.data?.event) { setError('No polymarket event found in file'); return; }
+    e.target.value = '';
+    readJsonFile(file)
+      .then((raw) => {
+        const snapshot = parseSnapshot(raw);
+        const polyCard = snapshot.cards.find(c => c.kind === 'polymarket');
+        const optCard = snapshot.cards.find(c => c.kind === 'options');
+        const pd = polyCard?.data as PolymarketCardData | undefined;
+        if (!pd?.event) { setError('No polymarket event found in file'); return; }
+        const od = optCard?.data as OptionsCardData | undefined;
 
-        const { event, markets, crypto: loadedCrypto, optionType: loadedOptionType } = polyCard.data;
-        const expiry: number | undefined = optCard?.data?.selectedOptions?.[0]?.expiryTimestamp;
+        const loadedCrypto = pd.crypto ?? snapshot.view?.crypto ?? null;
+        const loadedOptionType = pd.optionType ?? snapshot.view?.optionType ?? 'above';
+        const expiry = od?.selectedOptions?.[0]?.expiryTimestamp;
 
-        setPolyEvent(event);
-        setPolyMarkets(markets ?? []);
-        latestPolyMarketsRef.current = markets ?? [];
-        setCrypto(loadedCrypto ?? null);
-        setBybitBase(optCard?.data?.baseCoin ?? optCard?.data?.chain?.baseCoin ?? preferredBybitBase(loadedCrypto ?? null));
-        setOptionType(loadedOptionType ?? 'above');
-        latestOptionTypeRef.current = loadedOptionType ?? 'above';
+        setPolyEvent(pd.event);
+        setPolyMarkets(pd.markets ?? []);
+        latestPolyMarketsRef.current = pd.markets ?? [];
+        setCrypto(loadedCrypto);
+        setBybitBase(od?.baseCoin ?? od?.chain?.baseCoin ?? preferredBybitBase(loadedCrypto));
+        setOptionType(loadedOptionType);
+        latestOptionTypeRef.current = loadedOptionType;
         if (expiry) setLoadedExpiry(expiry);
         setResults([]);
         setSelectedResult(null);
@@ -262,14 +269,11 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
             })
             .catch(() => {});
         }
-      } catch {
-        setError('Failed to parse file');
-      }
-    };
-    reader.readAsText(file);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to parse file'));
   }, []);
 
-  // Save: download JSON (builder_full_save) + chart PNG
+  // Save: download snapshot JSON + chart PNG
   const handleSave = useCallback(async () => {
     if (!polyEvent || !selectedResult || !selectedMatch) return;
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -277,7 +281,7 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
     const qtyScale = bybitQty / 0.01;
     const scaledPolyQty = Math.round(selectedMatch.polyQty * qtyScale);
 
-    const polyCard = {
+    const polyCard: PositionCard = {
       id: 'finder-poly',
       kind: 'polymarket',
       data: {
@@ -292,9 +296,9 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
           entryPrice: selectedMatch.noAskPrice,
         }],
         minimized: false,
-      },
+      } as PolymarketCardData,
     };
-    const optCard = {
+    const optCard: PositionCard = {
       id: 'finder-opts',
       kind: 'options',
       data: {
@@ -323,28 +327,15 @@ export function PositionFinderTab({ onSendToBuilder }: PositionFinderTabProps) {
           },
         ],
         minimized: false,
-      },
+      } as OptionsCardData,
     };
-    const jsonBlob = new Blob([JSON.stringify({ kind: 'builder_full_save', cards: [polyCard, optCard] }, null, 2)], { type: 'application/json' });
-    const jsonUrl = URL.createObjectURL(jsonBlob);
-    const jsonA = document.createElement('a');
-    jsonA.href = jsonUrl;
-    jsonA.download = `finder_${label}_${dateStr}.json`;
-    jsonA.click();
-    URL.revokeObjectURL(jsonUrl);
 
-    if (chartRef.current) {
-      const imgBlob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
-      if (imgBlob) {
-        const imgUrl = URL.createObjectURL(imgBlob);
-        const imgA = document.createElement('a');
-        imgA.href = imgUrl;
-        imgA.download = `finder_${label}_chart_${dateStr}.png`;
-        imgA.click();
-        URL.revokeObjectURL(imgUrl);
-      }
-    }
-  }, [polyEvent, polyMarkets, crypto, optionType, bybitQty, bybitBase, selectedResult, selectedMatch]);
+    const snapshot = buildSnapshot('finder', [polyCard, optCard], {
+      view: { crypto, optionType, spotPrice },
+    });
+    downloadJson(snapshot, `finder_${label}_${dateStr}.json`);
+    await downloadElementPng(chartRef.current, `finder_${label}_chart_${dateStr}.png`);
+  }, [polyEvent, polyMarkets, crypto, optionType, spotPrice, bybitQty, bybitBase, selectedResult, selectedMatch]);
 
   // Send selected result to Position Builder
   const handleSendToBuilder = useCallback(() => {

@@ -189,6 +189,7 @@ export interface PolymarketCardData {
 export interface OptionsCardData {
   baseCoin?: BybitBaseCoin;
   chain: BybitOptionChain | null;
+  priceMode?: 'bid' | 'mid' | 'ask'; // entry quote used for new/repriced legs; default 'mid'
   selectedOptions: {
     symbol: string;
     optionsType: 'Call' | 'Put';

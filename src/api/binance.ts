@@ -229,7 +229,7 @@ export async function fetchCurrentPrice(crypto: CryptoOption): Promise<number> {
   const response = await axios.get(`${BINANCE_API_BASE}/ticker/price`, {
     params: { symbol },
   });
-  return parseFloat(response.data.price);
+  return parseFloat(response.data?.price) || 0;
 }
 
 /** Fetch OHLC candle data from Binance for use in Japanese candlestick charts */
@@ -264,7 +264,9 @@ export async function fetchCryptoCandles(
         c: parseFloat(k[4] as string),
       });
     }
-    currentStartTime = (klines[klines.length - 1][0] as number) + 60000;
+    // Advance to just past the last candle's open so the next page starts at the
+    // following candle — interval-agnostic, avoids re-fetching overlapping pages.
+    currentStartTime = (klines[klines.length - 1][0] as number) + 1;
     if (klines.length < 1000) break;
   }
   return allCandles;
@@ -295,7 +297,7 @@ export async function fetchCryptoPriceHistory(
     for (const k of klines) {
       allKlines.push({ t: Math.floor((k[0] as number) / 1000), p: parseFloat(k[4] as string) });
     }
-    currentStartTime = (klines[klines.length - 1][0] as number) + 60000;
+    currentStartTime = (klines[klines.length - 1][0] as number) + 1;
     if (klines.length < 1000) break;
   }
   return allKlines;

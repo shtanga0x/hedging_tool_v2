@@ -1,5 +1,12 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { toBlob as elementToBlob } from 'html-to-image';
+import {
+  buildSnapshot,
+  parseSnapshot,
+  downloadJson,
+  downloadElementPng,
+  readJsonFile,
+} from '../../io/snapshot';
+import type { PositionCard } from '../../types';
 import {
   Box,
   Paper,
@@ -27,7 +34,6 @@ import { BacktestOptionCard } from './BacktestOptionCard';
 import { BacktestFuturesCard } from './BacktestFuturesCard';
 import { fetchPriceHistory, formatPolyExpiry } from '../../api/polymarket';
 import { fetchDeribitCandles, fetchDeribitStrikes, resolveDeribitInstrument, fetchDeribitVolIndex, fetchDeribitTradesAsCandles } from '../../api/deribit';
-import { parseBybitSymbol } from '../../api/bybit';
 import { fetchBybitLibraryMidprice } from '../../api/bybit_library';
 import type { LibraryCandle } from '../../api/bybit_library';
 import { bsPrice, bsImpliedVol, polyFeePerShare } from '../../pricing/engine';
@@ -57,6 +63,19 @@ export interface BacktestResult {
 
 function generateId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+/** Nearest point (by `.t`) to `targetSec` in a time-ascending series.
+ *  Binary search — avoids an O(n·m) full scan per candle. */
+function nearestByTime<T extends { t: number }>(sorted: T[], targetSec: number): T {
+  let lo = 0, hi = sorted.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid].t < targetSec) lo = mid + 1; else hi = mid;
+  }
+  const a = sorted[lo];
+  const b = lo > 0 ? sorted[lo - 1] : a;
+  return Math.abs(a.t - targetSec) <= Math.abs(b.t - targetSec) ? a : b;
 }
 
 function formatDate(ts: number) {
@@ -114,6 +133,63 @@ function detectBacktestAsset(symbol: string): CryptoOption {
   return 'BTC';
 }
 
+/** Convert Builder/Finder snapshot cards into backtestable positions.
+ *  Used when a snapshot has no lossless `backtest.positions` block. */
+function cardsToBacktestPositions(
+  cards: PositionCard[],
+  colorFor: (idx: number) => string,
+): BacktestPosition[] {
+  const imported: BacktestPosition[] = [];
+  let idx = 0;
+  for (const card of cards) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = card.data as any;
+    if (card.kind === 'polymarket') {
+      const cardOptType: string = data?.optionType ?? '';
+      for (const sel of (data?.selections ?? [])) {
+        const market = (data?.markets ?? []).find((m: { id: string }) => m.id === sel.marketId);
+        if (!market) continue;
+        const tokenId = sel.side === 'YES' ? market.yesTokenId : market.noTokenId;
+        const expiry = market.endDate ? ` · exp ${formatPolyExpiry(market.endDate)}` : '';
+        const typePart = cardOptType ? ` · ${cardOptType}` : '';
+        imported.push({
+          id: generateId(), kind: 'polymarket',
+          label: `${sel.side} ${market.groupItemTitle || String(market.strikePrice)}${typePart}${expiry}`,
+          color: colorFor(idx++), tokenId, polySide: sel.side,
+          polyPriceMode: data?.priceMode,
+          quantity: sel.quantity, entryTimestamp: 0, entryPrice: 0,
+          polyEventSlug: data?.event?.slug,
+        });
+      }
+    } else if (card.kind === 'options') {
+      for (const opt of (data?.selectedOptions ?? [])) {
+        imported.push({
+          id: generateId(), kind: 'deribit',
+          label: `${opt.side === 'buy' ? 'Buy' : 'Sell'} ${opt.symbol}`,
+          color: colorFor(idx++), instrumentName: opt.symbol,
+          quantity: Math.abs(opt.quantity) * (opt.side === 'sell' ? -1 : 1),
+          entryTimestamp: 0, entryPrice: opt.entryPrice,
+          optStrike: opt.strike,
+          optExpiryMs: opt.expiryTimestamp,
+          optType: opt.optionsType,
+        });
+      }
+    } else if (card.kind === 'futures') {
+      const sym = (data?.symbol ?? '').toUpperCase();
+      const asset = detectBacktestAsset(sym);
+      imported.push({
+        id: generateId(), kind: 'futures',
+        label: `${(data?.size ?? 0) >= 0 ? 'Long' : 'Short'} ${asset} futures`,
+        color: colorFor(idx++), futuresSymbol: asset,
+        futuresSize: data?.size ?? 0,
+        futuresLeverage: data?.leverage,
+        entryTimestamp: 0, entryPrice: data?.entryPrice ?? 0,
+      });
+    }
+  }
+  return imported;
+}
+
 // A card group: polymarket cards can have multiple positions per card, others are 1:1
 interface CardGroup {
   id: string;
@@ -162,9 +238,13 @@ export function BacktesterTab() {
       }
     }
     if (minTs === Infinity) return;
+    // Guard against out-of-order responses: if the overlay/interval/results change
+    // while a fetch is in flight, discard the stale result.
+    let stale = false;
     fetchCryptoCandles(cryptoOverlay, minTs, maxTs, candleInterval)
-      .then(candles => setCryptoCandles(candles))
+      .then(candles => { if (!stale) setCryptoCandles(candles); })
       .catch(() => {});
+    return () => { stale = true; };
   }, [cryptoOverlay, results, candleInterval]);
 
   const colorFor = useCallback((idx: number) => POSITION_COLORS[idx % POSITION_COLORS.length], []);
@@ -343,7 +423,7 @@ export function BacktesterTab() {
             symbol: `${pos.futuresSymbol ?? 'BTC'}USDT`,
             entryPrice: pos.entryPrice,
             size: pos.futuresSize ?? 0.001,
-            leverage: 5,
+            leverage: pos.futuresLeverage ?? 5,
             minimized: false,
           },
         });
@@ -370,169 +450,38 @@ export function BacktesterTab() {
       });
     }
 
-    const payload = {
-      kind: 'builder_full_save',
-      cards,
-      backtestPositions: positions, // preserve full backtest data for lossless reload
-    };
-    const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const jsonUrl = URL.createObjectURL(jsonBlob);
-    const jsonA = document.createElement('a');
-    jsonA.href = jsonUrl;
-    jsonA.download = `backtest_${dateStr}.json`;
-    jsonA.click();
-    URL.revokeObjectURL(jsonUrl);
-
-    if (chartRef.current) {
-      const blob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `backtest_chart_${dateStr}.png`;
-        a.click();
-        URL.revokeObjectURL(url);
-      }
-    }
-  }, [positions]);
+    // The derived `cards` make the file openable in Builder/Finder; `backtest.positions`
+    // preserves the full backtest data for a lossless reload here.
+    const snapshot = buildSnapshot('backtester', cards as PositionCard[], {
+      backtest: { positions, startDate, endDate: endDateUserSet ? endDate : undefined },
+    });
+    downloadJson(snapshot, `backtest_${dateStr}.json`);
+    await downloadElementPng(chartRef.current, `backtest_chart_${dateStr}.png`);
+  }, [positions, startDate, endDate, endDateUserSet]);
 
   const handleUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target?.result as string);
-        if (Array.isArray(parsed)) {
-          // Backtester save format: BacktestPosition[]
-          loadPositionsWithCards(parsed.map((p: BacktestPosition, i: number) => ({ ...p, color: p.color || colorFor(i) })));
-        } else if (parsed?.kind === 'builder_full_save' && Array.isArray(parsed.backtestPositions)) {
-          // Backtester save with lossless backtestPositions — reload directly
-          loadPositionsWithCards(parsed.backtestPositions.map((p: BacktestPosition, i: number) => ({ ...p, color: p.color || colorFor(i) })));
-        } else if (parsed?.kind === 'builder_full_save' && Array.isArray(parsed.cards)) {
-          // Full Position Builder save — extract positions for backtesting
-          const imported: BacktestPosition[] = [];
-          let idx = 0;
-          for (const card of parsed.cards) {
-            if (card.kind === 'polymarket') {
-              const cardOptType: string = card.data?.optionType ?? '';
-              for (const sel of (card.data?.selections ?? [])) {
-                const market = (card.data?.markets ?? []).find((m: { id: string }) => m.id === sel.marketId);
-                if (!market) continue;
-                const tokenId = sel.side === 'YES' ? market.yesTokenId : market.noTokenId;
-                const expiry = market.endDate ? ` · exp ${formatPolyExpiry(market.endDate)}` : '';
-                const typePart = cardOptType ? ` · ${cardOptType}` : '';
-                imported.push({
-                  id: generateId(), kind: 'polymarket',
-                  label: `${sel.side} ${market.groupItemTitle || String(market.strikePrice)}${typePart}${expiry}`,
-                  color: colorFor(idx++), tokenId, polySide: sel.side,
-                  quantity: sel.quantity, entryTimestamp: 0, entryPrice: 0,
-                  polyEventSlug: card.data?.event?.slug,
-                });
-              }
-            } else if (card.kind === 'options') {
-              for (const opt of (card.data?.selectedOptions ?? [])) {
-                imported.push({
-                  id: generateId(), kind: 'deribit',
-                  label: `${opt.side === 'buy' ? 'Buy' : 'Sell'} ${opt.symbol}`,
-                  color: colorFor(idx++), instrumentName: opt.symbol,
-                  quantity: Math.abs(opt.quantity) * (opt.side === 'sell' ? -1 : 1),
-                  entryTimestamp: 0, entryPrice: opt.entryPrice,
-                  optStrike: opt.strike,
-                  optExpiryMs: opt.expiryTimestamp,
-                  optType: opt.optionsType,
-                });
-              }
-            } else if (card.kind === 'futures') {
-              const sym = (card.data?.symbol ?? '').toUpperCase();
-              const asset = detectBacktestAsset(sym);
-              imported.push({
-                id: generateId(), kind: 'futures',
-                label: `${(card.data?.size ?? 0) >= 0 ? 'Long' : 'Short'} ${asset} futures`,
-                color: colorFor(idx++), futuresSymbol: asset,
-                futuresSize: card.data?.size ?? 0,
-                entryTimestamp: 0, entryPrice: card.data?.entryPrice ?? 0,
-              });
-            }
-          }
-          if (imported.length > 0) loadPositionsWithCards(imported);
-        } else if (parsed?.kind === 'builder_snapshot') {
-          // Position Builder snapshot format
-          const imported: BacktestPosition[] = [];
-          let idx = 0;
-          for (const p of (parsed.polyPositions ?? [])) {
-            imported.push({
-              id: generateId(), kind: 'polymarket',
-              label: p.label, color: colorFor(idx++),
-              tokenId: p.tokenId, polySide: p.side,
-              quantity: p.quantity, entryTimestamp: 0, entryPrice: 0,
-            });
-          }
-          for (const o of (parsed.optionPositions ?? [])) {
-            // Bybit option symbols (BTC-28MAR25-100000-C) match Deribit format exactly
-            imported.push({
-              id: generateId(), kind: 'deribit',
-              label: `${o.side === 'buy' ? 'Buy' : 'Sell'} ${o.symbol}`,
-              color: colorFor(idx++),
-              instrumentName: o.symbol,
-              quantity: Math.abs(o.quantity) * (o.side === 'sell' ? -1 : 1),
-              entryTimestamp: 0, entryPrice: o.entryPrice,
-            });
-          }
-          for (const f of (parsed.futuresPositions ?? [])) {
-            imported.push({
-              id: generateId(), kind: 'futures',
-              label: `${f.size >= 0 ? 'Long' : 'Short'} ${f.asset} futures`,
-              color: colorFor(idx++),
-              futuresSymbol: f.asset, futuresSize: f.size,
-              entryTimestamp: 0, entryPrice: f.entryPrice,
-            });
-          }
-          if (imported.length > 0) loadPositionsWithCards(imported);
-        } else if (parsed?.version === 'position_hedger_snapshot_v1') {
-          // Old position_hedger snapshot format
-          const imported: BacktestPosition[] = [];
-          let idx = 0;
-          for (const sel of (parsed.polySelections ?? [])) {
-            const market = (parsed.polyMarkets ?? []).find((m: { id: string }) => m.id === sel.marketId);
-            if (!market) continue;
-            const tokenId = sel.side === 'YES' ? market.yesTokenId : market.noTokenId;
-            const expiry = market.endDate ? ` · exp ${formatPolyExpiry(market.endDate)}` : '';
-            imported.push({
-              id: generateId(), kind: 'polymarket',
-              label: `${sel.side} ${market.groupItemTitle || String(market.strikePrice)}${expiry}`,
-              color: colorFor(idx++), tokenId, polySide: sel.side,
-              quantity: sel.quantity, entryTimestamp: 0, entryPrice: 0,
-              polyEventSlug: parsed.polyEvent?.slug,
-            });
-          }
-          for (const sel of (parsed.bybitSelections ?? [])) {
-            const symbol = sel.symbol as string;
-            const parsedSym = parseBybitSymbol(symbol);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const chainTickers = (parsed.bybitChain?.tickers ?? []) as any[];
-            const ticker = chainTickers.find((t: { symbol: string }) => t.symbol === symbol);
-            const askPrice = ticker ? parseFloat(String(ticker.ask1Price)) || 0 : 0;
-            const bidPrice = ticker ? parseFloat(String(ticker.bid1Price)) || 0 : 0;
-            const entryPrice = sel.side === 'buy' ? askPrice : bidPrice;
-            imported.push({
-              id: generateId(), kind: 'deribit',
-              label: `${sel.side === 'buy' ? 'Buy' : 'Sell'} ${symbol}`,
-              color: colorFor(idx++),
-              instrumentName: symbol,
-              quantity: Math.abs(sel.quantity) * (sel.side === 'sell' ? -1 : 1),
-              entryTimestamp: 0, entryPrice,
-              optStrike: parsedSym?.strike,
-              optExpiryMs: parsed.bybitChain?.expiryTimestamp as number | undefined,
-              optType: parsedSym?.optionsType,
-            });
-          }
-          if (imported.length > 0) loadPositionsWithCards(imported);
-        }
-      } catch { /* ignore bad JSON */ }
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    setError(null);
+    readJsonFile(file)
+      .then((raw) => {
+        const snapshot = parseSnapshot(raw);
+        // Lossless path: a backtester save carries the full BacktestPosition[].
+        if (snapshot.backtest && Array.isArray(snapshot.backtest.positions)) {
+          loadPositionsWithCards(
+            snapshot.backtest.positions.map((p, i) => ({ ...p, color: p.color || colorFor(i) }))
+          );
+          if (snapshot.backtest.startDate) setStartDate(snapshot.backtest.startDate);
+          if (snapshot.backtest.endDate) { setEndDate(snapshot.backtest.endDate); setEndDateUserSet(true); }
+          return;
+        }
+        // Builder/Finder snapshot: derive backtestable positions from cards.
+        const imported = cardsToBacktestPositions(snapshot.cards, colorFor);
+        if (imported.length > 0) loadPositionsWithCards(imported);
+        else setError('No positions found in this file.');
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load file.'));
   }, [colorFor, loadPositionsWithCards]);
 
   // ---- Run backtest ----
@@ -565,11 +514,12 @@ export function BacktesterTab() {
       const futuresSymbols = [...new Set(
         positions.filter(p => p.kind === 'futures' && p.futuresSymbol).map(p => p.futuresSymbol as CryptoOption)
       )];
+      // Binance spot histories are independent — fetch them in parallel.
       const spotHistories = new Map<string, { t: number; p: number }[]>();
-      for (const sym of futuresSymbols) {
-        const pts = await fetchCryptoPriceHistory(sym, startTs, endTs);
-        spotHistories.set(sym, pts);
-      }
+      const spotResults = await Promise.all(
+        futuresSymbols.map(sym => fetchCryptoPriceHistory(sym, startTs, endTs).then(pts => [sym, pts] as const))
+      );
+      for (const [sym, pts] of spotResults) spotHistories.set(sym, pts);
 
       // Pre-fetch DVOL once per run before option candle fetches to avoid hitting
       // Deribit rate limits mid-run (candle fetches come after and may get 429'd,
@@ -579,8 +529,12 @@ export function BacktesterTab() {
       const hasEthOpts = positions.some(p => p.kind === 'deribit' && p.instrumentName?.startsWith('ETH'));
       const prefetchedDvol = new Map<'BTC' | 'ETH', Map<number, number>>();
       if (hasOptions) {
-        if (hasBtcOpts) prefetchedDvol.set('BTC', await fetchDeribitVolIndex('BTC', startTs * 1000, endTs * 1000));
-        if (hasEthOpts) prefetchedDvol.set('ETH', await fetchDeribitVolIndex('ETH', startTs * 1000, endTs * 1000));
+        const [btcDvol, ethDvol] = await Promise.all([
+          hasBtcOpts ? fetchDeribitVolIndex('BTC', startTs * 1000, endTs * 1000) : Promise.resolve(null),
+          hasEthOpts ? fetchDeribitVolIndex('ETH', startTs * 1000, endTs * 1000) : Promise.resolve(null),
+        ]);
+        if (btcDvol) prefetchedDvol.set('BTC', btcDvol);
+        if (ethDvol) prefetchedDvol.set('ETH', ethDvol);
       }
 
       for (const pos of positions) {
@@ -753,8 +707,7 @@ export function BacktesterTab() {
                 } else {
                   const usdCandles = deribitCandles.map(c => {
                     const cTs = Math.floor(c.timestamp / 1000);
-                    const spot = btcSpot.reduce((best, pt) =>
-                      Math.abs(pt.t - cTs) < Math.abs(best.t - cTs) ? pt : best);
+                    const spot = nearestByTime(btcSpot, cTs);
                     return { timestamp: c.timestamp, close: c.close * spot.p };
                   });
                   const entryPrice = usdCandles[0].close;
@@ -820,8 +773,7 @@ export function BacktesterTab() {
                 const ivEntries: { tSec: number; iv: number }[] = [];
                 for (const c of cachedDeribitCandles) {
                   const cTs = Math.floor(c.timestamp / 1000);
-                  const spot = btcSpot.reduce((best, pt) =>
-                    Math.abs(pt.t - cTs) < Math.abs(best.t - cTs) ? pt : best);
+                  const spot = nearestByTime(btcSpot, cTs);
                   if (!spot) continue;
                   const cTau = Math.max((effectivePos.optExpiryMs! / 1000 - cTs) / YEAR_SEC, 0);
                   // Skip final hour — near-expiry vega ≈ 0 makes IV unstable
@@ -891,12 +843,17 @@ export function BacktesterTab() {
             newResults.push({ position: pos, pnlSeries: [], entryValue: 0 });
             continue;
           }
-          const entryPrice = spotPts[0].p;
+          // Honor a user-specified entry price; otherwise enter at the window start.
+          const entryPrice = pos.entryPrice && pos.entryPrice > 0 ? pos.entryPrice : spotPts[0].p;
+          const leverage = pos.futuresLeverage && pos.futuresLeverage > 0 ? pos.futuresLeverage : 5;
           const pnlSeries: PnlPoint[] = spotPts.map(pt => ({
             timestamp: pt.t,
             pnl: (pt.p - entryPrice) * pos.futuresSize!,
           }));
-          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: entryPrice * Math.abs(pos.futuresSize!) });
+          // Cost basis = margin posted (notional / leverage), so the chart's
+          // "% on margin" is the leveraged return.
+          const margin = Math.abs(entryPrice * pos.futuresSize!) / leverage;
+          newResults.push({ position: pos, pnlSeries, entryPrice, entryValue: margin });
         }
       }
 

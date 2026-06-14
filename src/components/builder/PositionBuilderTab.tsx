@@ -1,5 +1,12 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { toBlob as elementToBlob } from 'html-to-image';
+import {
+  buildSnapshot,
+  parseSnapshot,
+  downloadJson,
+  downloadElementPng,
+  readJsonFile,
+  findExpiredOption,
+} from '../../io/snapshot';
 import {
   Alert,
   Box,
@@ -155,7 +162,10 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const [priceRange, setPriceRange] = useState<[number, number]>(INITIAL_PRICE_RANGE);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Quantized to the minute so its value is stable across rapid re-renders
+  // (keeps the curve memos from recomputing every render) while still advancing
+  // over a long session. Minute granularity is negligible vs. tau.
+  const nowSec = Math.floor(Date.now() / 60000) * 60;
   const primaryPolyCardData = useMemo<PolymarketCardData | null>(() => {
     let best: PolymarketCardData | null = null;
     let earliest = Infinity;
@@ -425,76 +435,47 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
   const chartRef = useRef<HTMLDivElement>(null);
 
   const handleSaveSnapshot = useCallback(async () => {
-    // Save full card state (options chain omitted — too large; selectedOptions preserved for chart)
     const dateStr = new Date().toISOString().slice(0, 10);
-    const serialized = cards.map(card => {
-      if (card.kind === 'options') {
-        const d = card.data as OptionsCardData;
-        return { id: card.id, kind: card.kind, data: { baseCoin: d.baseCoin ?? d.chain?.baseCoin, chain: null, selectedOptions: d.selectedOptions, minimized: d.minimized } };
-      }
-      return { id: card.id, kind: card.kind, data: card.data };
+    const snapshot = buildSnapshot('builder', cards, {
+      view: { spotPrice, priceRange, crypto: primaryCrypto, optionType: primaryOptionType },
     });
-    const blob = new Blob([JSON.stringify({ kind: 'builder_full_save', cards: serialized, spotPrice, priceRange }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `builder_${dateStr}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-
-    if (chartRef.current) {
-      const imgBlob = await elementToBlob(chartRef.current, { pixelRatio: 2 });
-      if (imgBlob) {
-        const imgUrl = URL.createObjectURL(imgBlob);
-        const imgA = document.createElement('a');
-        imgA.href = imgUrl;
-        imgA.download = `builder_chart_${dateStr}.png`;
-        imgA.click();
-        URL.revokeObjectURL(imgUrl);
-      }
-    }
-  }, [cards, spotPrice, priceRange]);
+    downloadJson(snapshot, `builder_${dateStr}.json`);
+    await downloadElementPng(chartRef.current, `builder_chart_${dateStr}.png`);
+  }, [cards, spotPrice, priceRange, primaryCrypto, primaryOptionType]);
 
   const handleLoadSnapshot = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
     setLoadError(null);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target?.result as string);
-        if (parsed?.kind === 'builder_full_save' && Array.isArray(parsed.cards)) {
-          const loaded = parsed.cards as PositionCard[];
+    readJsonFile(file)
+      .then((raw) => {
+        const snapshot = parseSnapshot(raw);
+        const loaded = snapshot.cards;
 
-          // Validate options cards for expiry and required fields
-          const nowMs = Date.now();
-          for (const card of loaded) {
-            if (card.kind !== 'options') continue;
-            const d = card.data as OptionsCardData;
-            for (const opt of d.selectedOptions ?? []) {
-              // Guard against missing required fields that would crash the render
-              if (opt.entryPrice == null) (opt as Record<string, unknown>).entryPrice = 0;
-              if (opt.quantity == null) (opt as Record<string, unknown>).quantity = 0.01;
-              if (opt.markIv == null) (opt as Record<string, unknown>).markIv = 0;
-              // Warn if option has expired
-              if (opt.expiryTimestamp && opt.expiryTimestamp < nowMs) {
-                const expStr = new Date(opt.expiryTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                setLoadError(
-                  `This file contains expired options (expired ${expStr}). ` +
-                  `The P&L chart will show at-expiry payoff only. ` +
-                  `To view historical performance, use the Backtester tab.`
-                );
-              }
-            }
-          }
+        // Warn (don't block) if the file carries expired options.
+        const expiredTs = findExpiredOption(loaded);
+        if (expiredTs) {
+          const expStr = new Date(expiredTs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          setLoadError(
+            `This file contains expired options (expired ${expStr}). ` +
+            `The P&L chart will show at-expiry payoff only. ` +
+            `To view historical performance, use the Backtester tab.`
+          );
+        }
 
-          setCards(loaded);
-          // Restore primary state from first poly card, or detect crypto from options/futures if no poly card
-          const firstPoly = loaded.find(c => c.kind === 'polymarket');
-          if (firstPoly) {
-            const d = firstPoly.data as PolymarketCardData;
-            if (d.crypto) setPrimaryCrypto(d.crypto);
-            setPrimaryOptionType(d.optionType);
+        setCards(loaded);
+
+        // Restore primary crypto/optionType: prefer the first poly card, then the
+        // saved view, then auto-detect from an options/futures symbol.
+        const firstPoly = loaded.find(c => c.kind === 'polymarket');
+        if (firstPoly) {
+          const d = firstPoly.data as PolymarketCardData;
+          if (d.crypto) setPrimaryCrypto(d.crypto);
+          setPrimaryOptionType(d.optionType);
+        } else {
+          if (snapshot.view?.crypto) {
+            setPrimaryCrypto(snapshot.view.crypto);
           } else {
             const firstOptions = loaded.find(c => c.kind === 'options');
             const firstFutures = loaded.find(c => c.kind === 'futures');
@@ -506,135 +487,21 @@ export function PositionBuilderTab({ transferPayload, onTransferConsumed }: Posi
               if (crypto) setPrimaryCrypto(crypto);
             }
           }
-
-          // Restore spotPrice and priceRange if saved
-          if (parsed.spotPrice > 0) {
-            setSpotPrice(parsed.spotPrice);
-            setSpotInputValue(formatSpotInput(parsed.spotPrice));
-          }
-          if (Array.isArray(parsed.priceRange) && parsed.priceRange.length === 2) {
-            setPriceRange(parsed.priceRange as [number, number]);
-          }
-        } else if (parsed?.version === 'position_hedger_snapshot_v1') {
-          const v1 = parsed;
-          const newCards: PositionCard[] = [];
-
-          // Rebuild Polymarket card
-          if (Array.isArray(v1.polyMarkets) && Array.isArray(v1.polySelections)) {
-            const selections = v1.polySelections.map((sel: { marketId: string; side: string; quantity: number }) => {
-              const market = v1.polyMarkets.find((m: { id: string }) => m.id === sel.marketId);
-              let entryPrice = 0;
-              if (market) {
-                if (sel.side === 'YES') entryPrice = market.bestAsk ?? market.currentPrice;
-                else entryPrice = 1 - (market.bestBid ?? market.currentPrice);
-              }
-              return { marketId: sel.marketId, side: sel.side, quantity: sel.quantity, entryPrice };
-            });
-            const loadedEvent = v1.polyEvent
-              ? { ...v1.polyEvent, markets: v1.polyEvent.markets ?? [] }
-              : null;
-            newCards.push({
-              id: generateId(),
-              kind: 'polymarket',
-              data: {
-                event: loadedEvent,
-                optionType: v1.optionType ?? 'above',
-                crypto: v1.crypto ?? null,
-                markets: v1.polyMarkets,
-                selections,
-                minimized: false,
-              } as PolymarketCardData,
-            });
-            if (v1.crypto) setPrimaryCrypto(v1.crypto);
-            if (v1.optionType) setPrimaryOptionType(v1.optionType);
-          }
-
-          // Rebuild Options card from bybitChain + bybitSelections
-          if (v1.bybitChain && Array.isArray(v1.bybitSelections) && v1.bybitSelections.length > 0) {
-            const tickersArr: Array<{ symbol: string; bid1Price?: string | number; ask1Price?: string | number; markPrice?: string | number; markIv?: number; delta?: number; gamma?: number; vega?: number; theta?: number }> =
-              v1.bybitChain.tickers ?? [];
-            const tickersMap = new Map(tickersArr.map(t => [t.symbol, {
-              symbol: t.symbol,
-              bid1Price: parseFloat(String(t.bid1Price ?? 0)),
-              ask1Price: parseFloat(String(t.ask1Price ?? 0)),
-              markPrice: parseFloat(String(t.markPrice ?? 0)),
-              markIv: t.markIv ?? 0,
-              delta: t.delta ?? 0,
-              gamma: t.gamma ?? 0,
-              vega: t.vega ?? 0,
-              theta: t.theta ?? 0,
-            }]));
-            const chain: BybitChainType = {
-              baseCoin: v1.bybitChain.baseCoin ?? (v1.bybitChain.instruments?.[0]?.symbol?.startsWith('XAUT') ? 'XAUT' : 'BTC'),
-              expiryLabel: v1.bybitChain.expiryLabel,
-              expiryTimestamp: v1.bybitChain.expiryTimestamp,
-              instruments: v1.bybitChain.instruments,
-              tickers: tickersMap,
-            };
-            const selectedOptions = v1.bybitSelections.map((sel: { symbol: string; side: string; quantity: number }) => {
-              const inst = (v1.bybitChain.instruments as Array<{ symbol: string; optionsType: string; strike: number; expiryTimestamp: number }>)
-                .find(i => i.symbol === sel.symbol);
-              const ticker = tickersMap.get(sel.symbol);
-              const entryPrice = sel.side === 'buy'
-                ? (ticker?.ask1Price ?? 0)
-                : (ticker?.bid1Price ?? 0);
-              return {
-                symbol: sel.symbol,
-                optionsType: (inst?.optionsType ?? 'Call') as 'Call' | 'Put',
-                strike: inst?.strike ?? 0,
-                expiryTimestamp: inst?.expiryTimestamp ?? v1.bybitChain.expiryTimestamp,
-                side: sel.side as 'buy' | 'sell',
-                quantity: sel.quantity,
-                entryPrice,
-                markIv: ticker?.markIv ?? 0,
-              };
-            });
-
-            // Warn if options have expired
-            const nowMs = Date.now();
-            const expiredOpt = selectedOptions.find((opt: { expiryTimestamp: number }) => opt.expiryTimestamp && opt.expiryTimestamp < nowMs);
-            if (expiredOpt) {
-              const expStr = new Date(expiredOpt.expiryTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-              setLoadError(
-                `This file contains expired options (expired ${expStr}). ` +
-                `The P&L chart will show at-expiry payoff only. ` +
-                `To view historical performance, use the Backtester tab.`
-              );
-            }
-
-            newCards.push({
-              id: generateId(),
-              kind: 'options',
-              data: { baseCoin: chain.baseCoin, chain, selectedOptions, minimized: false } as OptionsCardData,
-            });
-            setBybitChain(chain);
-          }
-
-          if (newCards.length > 0) {
-            setCards(newCards);
-            if (v1.spotPrice > 0) {
-              setSpotPrice(v1.spotPrice);
-              setSpotInputValue(formatSpotInput(v1.spotPrice));
-            }
-            // Only restore saved price range if options haven't expired — expired files
-            // have stale ranges that no longer match the live spot price.
-            const optionsExpired = v1.bybitChain?.expiryTimestamp && v1.bybitChain.expiryTimestamp < Date.now();
-            if (!optionsExpired && Array.isArray(v1.priceRange) && v1.priceRange.length === 2) {
-              setPriceRange(v1.priceRange as [number, number]);
-            }
-          } else {
-            setLoadError('This file has no positions to load.');
-          }
-        } else {
-          setLoadError('Unrecognized file format. Please upload a valid position builder snapshot (.json).');
+          if (snapshot.view?.optionType) setPrimaryOptionType(snapshot.view.optionType);
         }
-      } catch (err) {
-        console.error('[Builder] file load failed:', err);
-        setLoadError(`Failed to load file: ${err instanceof Error ? err.message : 'invalid format'}`);
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+
+        // Restore view (spot + price range).
+        if (snapshot.view?.spotPrice && snapshot.view.spotPrice > 0) {
+          setSpotPrice(snapshot.view.spotPrice);
+          setSpotInputValue(formatSpotInput(snapshot.view.spotPrice));
+        }
+        if (Array.isArray(snapshot.view?.priceRange) && snapshot.view!.priceRange!.length === 2) {
+          setPriceRange(snapshot.view!.priceRange as [number, number]);
+        }
+      })
+      .catch((err) => {
+        setLoadError(err instanceof Error ? err.message : 'Failed to load file.');
+      });
   }, []);
 
   // Compute smile from polymarket positions

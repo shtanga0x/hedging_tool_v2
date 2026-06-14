@@ -120,6 +120,3 @@ export const lightTheme = createTheme({
     },
   },
 });
-
-// Keep backward compat
-export const theme = darkTheme;

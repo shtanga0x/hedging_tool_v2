@@ -19,13 +19,6 @@ export interface LibraryCandle {
   close: number;      // midprice in USDT
 }
 
-export interface LibraryCatalogEntry {
-  date: string;
-  expiry: string;
-  strike: number;
-  option_type: string;  // "C" or "P"
-}
-
 /**
  * Fetch midprice time series for one option from the local library.
  *
@@ -79,26 +72,4 @@ export async function fetchBybitLibraryMidprice(
   const result = timestamps.map((ts, i) => ({ timestamp: ts, close: midprices[i] }));
   _cache.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_TTL });
   return result;
-}
-
-/** Fetch the full catalog of available (date, expiry, strike, option_type) combinations. */
-export async function fetchBybitLibraryCatalog(): Promise<LibraryCatalogEntry[]> {
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/api/catalog`);
-  } catch {
-    throw new Error('Bybit library server not reachable.');
-  }
-  if (!res.ok) throw new Error(`Bybit library catalog error ${res.status}`);
-  return res.json();
-}
-
-/** Quick check whether the API server is running. */
-export async function checkBybitLibraryHealth(): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(2000) });
-    return res.ok;
-  } catch {
-    return false;
-  }
 }
