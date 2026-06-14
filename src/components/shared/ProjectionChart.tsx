@@ -60,11 +60,12 @@ interface ChartDataRow {
 const CHART_MARGIN = { top: 20, right: 60, bottom: 50, left: 20 };
 const ACTIVE_DOT = { r: 4 };
 
-/** Adaptive tick intervals: ~11 labeled major ticks at 1100px chart width, scales with actual width. */
-function getAdaptiveTickIntervals(range: number, chartWidth: number): { major: number; minor: number } {
+/** Adaptive minor-tick interval: ~11 labeled major ticks at 1100px chart width, scales with actual width.
+ *  (Major ticks are derived in CustomXTick as every 5th minor tick.) */
+function getAdaptiveTickIntervals(range: number, chartWidth: number): { minor: number } {
   const TARGET_TICKS_1100 = 11;
   const targetTicks = Math.max(4, Math.round(TARGET_TICKS_1100 * chartWidth / 1100));
-  if (range <= 0) return { major: 1000, minor: 200 };
+  if (range <= 0) return { minor: 200 };
   const rawMajor = range / targetTicks;
   const magnitude = Math.pow(10, Math.floor(Math.log10(rawMajor)));
   // Find the nice multiplier (1, 2, 5, 10) whose tick count is closest to target
@@ -75,7 +76,7 @@ function getAdaptiveTickIntervals(range: number, chartWidth: number): { major: n
     const diff = Math.abs(range / candidate - targetTicks);
     if (diff < bestDiff) { bestDiff = diff; bestMajor = candidate; }
   }
-  return { major: bestMajor, minor: bestMajor / 5 };
+  return { minor: bestMajor / 5 };
 }
 
 
@@ -101,7 +102,6 @@ function CustomXTick(props: {
   x: number;
   y: number;
   payload: { value: number };
-  majorInterval: number;
   minorInterval: number;
   tickColor: string;
   tickColorFaded: string;
@@ -451,12 +451,12 @@ export function ProjectionChart({
     return { yDomain: domain, yTicks: ticks };
   }, [combinedCurves, combinedLabels, hiddenLines, polyNowCurve, polyExpiryCurve, polyAtBybitExpiryCurve, bybitNowCurve, bybitExpiryCurve, futuresNowCurve]);
 
-  const { allTicks, majorInterval, minorInterval, xDomain } = useMemo(() => {
-    if (chartData.length === 0) return { allTicks: [], majorInterval: 1000, minorInterval: 100, xDomain: [0, 1] };
+  const { allTicks, minorInterval, xDomain } = useMemo(() => {
+    if (chartData.length === 0) return { allTicks: [], minorInterval: 100, xDomain: [0, 1] };
     const min = chartData[0].cryptoPrice;
     const max = chartData[chartData.length - 1].cryptoPrice;
     const range = max - min;
-    const { major, minor } = getAdaptiveTickIntervals(range, chartWidth);
+    const { minor } = getAdaptiveTickIntervals(range, chartWidth);
 
     const ticks: number[] = [];
     const tickDec = minor < 1 ? Math.ceil(-Math.log10(minor)) : 0;
@@ -466,7 +466,7 @@ export function ProjectionChart({
     for (let i = startIdx; i <= endIdx; i++) {
       ticks.push(Math.round(i * minor * tickFactor) / tickFactor);
     }
-    return { allTicks: ticks, majorInterval: major, minorInterval: minor, xDomain: [min, max] };
+    return { allTicks: ticks, minorInterval: minor, xDomain: [min, max] };
   }, [chartData, chartWidth]);
 
   const formatYAxisPnl = useCallback((v: number) => v.toFixed(2), []);
@@ -522,9 +522,9 @@ export function ProjectionChart({
   const renderTick = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (props: any) => (
-      <CustomXTick {...props} majorInterval={majorInterval} minorInterval={minorInterval} tickColor={axisColor} tickColorFaded={tickColorFaded} />
+      <CustomXTick {...props} minorInterval={minorInterval} tickColor={axisColor} tickColorFaded={tickColorFaded} />
     ),
-    [majorInterval, minorInterval, axisColor, tickColorFaded]
+    [minorInterval, axisColor, tickColorFaded]
   );
 
   // Line styles map for tooltip + legend
@@ -789,6 +789,10 @@ export function ProjectionChart({
           <div
             key={item.label}
             onClick={() => handleLegendClick(item.label)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleLegendClick(item.label); } }}
+            role="button"
+            tabIndex={0}
+            aria-pressed={!hiddenLines.has(item.label)}
             style={{
               cursor: 'pointer',
               display: 'flex',

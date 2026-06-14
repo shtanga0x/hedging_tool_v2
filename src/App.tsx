@@ -105,7 +105,11 @@ export default function App() {
             <Telegram fontSize="small" />
             shtanga0x
           </Typography>
-          <IconButton size="small" onClick={() => setIsDark(d => !d)}>
+          <IconButton
+            size="small"
+            onClick={() => setIsDark(d => !d)}
+            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
             {isDark ? <Brightness7 /> : <Brightness4 />}
           </IconButton>
         </Toolbar>

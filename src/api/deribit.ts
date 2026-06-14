@@ -1,10 +1,8 @@
 import axios from 'axios';
 import type { DeribitCandle } from '../types';
-import { API_CONFIG } from './config';
 
-// DERIBIT_API_BASE kept for reference but no longer used for candle fetches.
-// Candles now use WebSocket (see fetchDeribitViaWS) which bypasses the Worker entirely.
-const { DERIBIT_API_BASE: _DERIBIT_API_BASE } = API_CONFIG; void _DERIBIT_API_BASE;
+// Deribit is called directly (no Worker proxy): candles over WebSocket
+// (fetchDeribitViaWS), DVOL/instruments over CORS-enabled HTTPS.
 const DERIBIT_DIRECT = 'https://www.deribit.com';
 const DERIBIT_WS = 'wss://www.deribit.com/ws/api/v2';
 

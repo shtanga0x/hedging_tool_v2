@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Box,
   TextField,
@@ -40,6 +40,10 @@ export function PolymarketSearch({ onEventLoaded, loading: externalLoading, even
   const [searchResults, setSearchResults] = useState<EventSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchSeqRef = useRef(0);
+
+  // Cancel any pending debounced search on unmount.
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const loadEventBySlug = useCallback(async (slug: string) => {
     setLoading(true);
@@ -74,14 +78,16 @@ export function PolymarketSearch({ onEventLoaded, loading: externalLoading, even
       return;
     }
     debounceRef.current = setTimeout(async () => {
+      // Guard against out-of-order responses: only the latest query may write state.
+      const seq = ++searchSeqRef.current;
       setSearchLoading(true);
       try {
         const results = await searchEvents(value);
-        setSearchResults(results);
+        if (seq === searchSeqRef.current) setSearchResults(results);
       } catch {
-        setSearchResults([]);
+        if (seq === searchSeqRef.current) setSearchResults([]);
       } finally {
-        setSearchLoading(false);
+        if (seq === searchSeqRef.current) setSearchLoading(false);
       }
     }, 300);
   }, []);

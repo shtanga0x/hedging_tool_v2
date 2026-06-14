@@ -38,6 +38,23 @@ import { fetchBybitInstruments, fetchBybitTickers, fetchBybitSpotPrice, groupByE
 
 const OPT_COLOR = '#FF8C00'; // options orange
 
+type PriceMode = 'bid' | 'mid' | 'ask';
+
+/** Resolve an option entry price from the live ticker for the chosen quote.
+ *  Mirrors the Polymarket card's bid/mid/ask selector. Falls back gracefully
+ *  when one side of the quote is missing (illiquid strikes). */
+function optionEntryPrice(ticker: BybitTicker, mode: PriceMode): number {
+  const bid = ticker.bid1Price;
+  const ask = ticker.ask1Price;
+  if (mode === 'bid') return bid > 0 ? bid : (ask > 0 ? ask : ticker.markPrice);
+  if (mode === 'ask') return ask > 0 ? ask : (bid > 0 ? bid : ticker.markPrice);
+  // mid
+  if (bid > 0 && ask > 0) return (bid + ask) / 2;
+  if (bid > 0) return bid;
+  if (ask > 0) return ask;
+  return ticker.markPrice;
+}
+
 interface OptionsCardProps {
   id: string;
   data: OptionsCardData;
@@ -75,6 +92,7 @@ export function OptionsCard({
   const [chains, setChains] = useState<BybitChainType[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<number | ''>('');
   const [baseCoin, setBaseCoin] = useState<BybitBaseCoin>(() => inferBaseCoin(data));
+  const [priceMode, setPriceMode] = useState<PriceMode>(data.priceMode ?? 'mid');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spot, setSpot] = useState(externalSpot);
@@ -235,8 +253,8 @@ export function OptionsCard({
     if (isSelected(inst.symbol, side)) {
       update({ selectedOptions: data.selectedOptions.filter(o => !(o.symbol === inst.symbol && o.side === side)) });
     } else {
-      // Always use bid1Price as entry price
-      const entryPrice = ticker.bid1Price > 0 ? ticker.bid1Price : ticker.markPrice;
+      // Entry price follows the selected bid/mid/ask quote (default mid).
+      const entryPrice = optionEntryPrice(ticker, priceMode);
       const qty = inst.optionsType === 'Call' ? getCallQtyNum(inst.strike) : getPutQtyNum(inst.strike);
       const newOpt: OptionsCardData['selectedOptions'][0] = {
         symbol: inst.symbol,
@@ -250,6 +268,19 @@ export function OptionsCard({
       };
       update({ selectedOptions: [...data.selectedOptions, newOpt] });
     }
+  };
+
+  // When the quote mode changes, re-price every existing leg and persist the mode.
+  const handlePriceModeChange = (newMode: PriceMode) => {
+    setPriceMode(newMode);
+    const tickers = activeChain?.tickers ?? data.chain?.tickers;
+    update({
+      priceMode: newMode,
+      selectedOptions: data.selectedOptions.map(o => {
+        const ticker = tickers?.get(o.symbol);
+        return ticker ? { ...o, entryPrice: optionEntryPrice(ticker, newMode) } : o;
+      }),
+    });
   };
 
   // Cell style helpers
@@ -408,6 +439,20 @@ export function OptionsCard({
                 </MenuItem>
               ))}
             </Select>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">Entry price:</Typography>
+              <ToggleButtonGroup
+                size="small"
+                exclusive
+                value={priceMode}
+                onChange={(_, v) => { if (v) handlePriceModeChange(v as PriceMode); }}
+                sx={{ height: 26 }}
+              >
+                <ToggleButton value="bid" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', color: '#EF4444', '&.Mui-selected': { bgcolor: 'rgba(239,68,68,0.12)', color: '#EF4444' } }}>Bid</ToggleButton>
+                <ToggleButton value="mid" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', '&.Mui-selected': { bgcolor: 'rgba(139,157,195,0.15)' } }}>Mid</ToggleButton>
+                <ToggleButton value="ask" sx={{ px: 1.5, py: 0, fontSize: '0.7rem', color: '#22C55E', '&.Mui-selected': { bgcolor: 'rgba(34,197,94,0.12)', color: '#22C55E' } }}>Ask</ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
           </Box>
 
           {activeChain && strikeRows.length > 0 && (

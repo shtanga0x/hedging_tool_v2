@@ -23,10 +23,6 @@ function setCache<T>(key: string, data: T): void {
   cache.set(key, { data, timestamp: Date.now() });
 }
 
-export function clearBybitCache(): void {
-  cache.clear();
-}
-
 /** Parse Bybit symbol like "BTC-28FEB25-100000-C" or "BTC-27MAR26-86000-P-USDT" */
 export function parseBybitSymbol(symbol: string): {
   base: string;
@@ -40,6 +36,7 @@ export function parseBybitSymbol(symbol: string): {
   if (parts.length !== 4) return null;
   const strike = parseFloat(parts[2]);
   if (isNaN(strike)) return null;
+  if (parts[3] !== 'C' && parts[3] !== 'P') return null;
   return {
     base: parts[0],
     expiryStr: parts[1],
@@ -159,10 +156,13 @@ export function groupByExpiry(
   const chains: BybitOptionChain[] = [];
   for (const [expiryTs, insts] of groups) {
     const date = new Date(expiryTs);
+    // Bybit settles at 08:00 UTC — format in UTC so the expiry day doesn't shift
+    // for users in negative-offset timezones.
     const expiryLabel = date.toLocaleDateString('en-US', {
       day: 'numeric',
       month: 'short',
       year: 'numeric',
+      timeZone: 'UTC',
     });
 
     // Filter tickers for this expiry's instruments
@@ -187,72 +187,4 @@ export function groupByExpiry(
   // Sort chronologically
   chains.sort((a, b) => a.expiryTimestamp - b.expiryTimestamp);
   return chains;
-}
-
-export interface BybitCandle {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-}
-
-/**
- * Fetch Bybit option mark-price candles with pagination.
- * Bybit uses two symbol formats depending on contract vintage:
- *   older: "BTC-28FEB25-100000-C"
- *   newer: "BTC-28MAR26-100000-C-USDT"
- * This function tries both formats if the first returns no data.
- * Uses 60-min resolution; paginates backwards to cover the full date range.
- * Bybit returns newest-first per request; result is sorted chronologically.
- */
-export async function fetchBybitOptionMarkCandles(
-  symbol: string,
-  startMs: number,
-  endMs: number,
-): Promise<BybitCandle[]> {
-  // Try the symbol as passed; if empty, try the other suffix variant
-  const alt = symbol.endsWith('-USDT')
-    ? symbol.slice(0, -5)           // strip -USDT
-    : `${symbol}-USDT`;             // add -USDT
-
-  const result = await _fetchBybitCandles(symbol, startMs, endMs);
-  if (result.length > 0) return result;
-  return _fetchBybitCandles(alt, startMs, endMs);
-}
-
-async function _fetchBybitCandles(
-  symbol: string,
-  startMs: number,
-  endMs: number,
-): Promise<BybitCandle[]> {
-  const LIMIT = 200;
-  const batches: BybitCandle[][] = [];
-  let currentEnd = endMs;
-
-  for (let page = 0; page < 20; page++) {
-    const response = await axios.get(`${BYBIT_API_BASE}/v5/market/mark-price-kline`, {
-      params: { category: 'option', symbol, interval: 60, start: startMs, end: currentEnd, limit: LIMIT },
-    });
-    const list: string[][] = response.data?.result?.list ?? [];
-    if (list.length === 0) break;
-
-    // Bybit returns newest-first — reverse each batch to chronological order
-    const batch: BybitCandle[] = [...list].reverse().map(row => ({
-      timestamp: parseInt(row[0]),
-      open: parseFloat(row[1]),
-      high: parseFloat(row[2]),
-      low: parseFloat(row[3]),
-      close: parseFloat(row[4]),
-    }));
-
-    batches.unshift(batch);
-
-    if (list.length < LIMIT) break;
-    const oldestTs = parseInt(list[list.length - 1][0]);
-    if (oldestTs <= startMs) break;
-    currentEnd = oldestTs - 1;
-  }
-
-  return batches.flat();
 }

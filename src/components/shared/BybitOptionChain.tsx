@@ -59,17 +59,14 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
     return chains.find(c => c.expiryTimestamp === selectedExpiry) ?? null;
   }, [chains, selectedExpiry]);
 
+  // Selecting an expiry only updates local state; the activeChain effect below is
+  // the single source that notifies the parent (avoids a double onChainSelected).
   const handleExpiryChange = useCallback((value: number | '') => {
     setSelectedExpiry(value);
-    if (value === '') {
-      onChainSelected(null);
-    } else {
-      const chain = chains.find(c => c.expiryTimestamp === value) ?? null;
-      onChainSelected(chain);
-    }
-  }, [chains, onChainSelected]);
+  }, []);
 
-  // Also notify parent when chains data loads and expiry was already selected
+  // Sole notifier: fires whenever the resolved chain changes (selection, data load,
+  // or requested-expiry auto-select all flow through here exactly once).
   useEffect(() => {
     onChainSelected(activeChain);
   }, [activeChain, onChainSelected]);
@@ -83,7 +80,6 @@ export function BybitOptionChain({ onChainSelected, onSpotPriceLoaded, requested
       .sort((a, b) => a.expiryTimestamp - b.expiryTimestamp)[0];
     if (target) {
       setSelectedExpiry(target.expiryTimestamp);
-      onChainSelected(target);
     }
   }, [requestedExpiry, chains]); // eslint-disable-line react-hooks/exhaustive-deps
 
