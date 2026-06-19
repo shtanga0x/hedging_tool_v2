@@ -36,7 +36,8 @@ import { fetchPriceHistory, formatPolyExpiry } from '../../api/polymarket';
 import { fetchDeribitCandles, fetchDeribitStrikes, resolveDeribitInstrument, fetchDeribitVolIndex, fetchDeribitTradesAsCandles } from '../../api/deribit';
 import { fetchBybitLibraryMidprice } from '../../api/bybit_library';
 import type { LibraryCandle } from '../../api/bybit_library';
-import { bsPrice, bsImpliedVol, polyFeePerShare } from '../../pricing/engine';
+import { bsPrice, bsImpliedVol, interpolateSmile, polyFeePerShare } from '../../pricing/engine';
+import type { SmilePoint } from '../../pricing/engine';
 import { fetchCryptoCandles, fetchCryptoPriceHistory } from '../../api/binance';
 import type { OHLCCandle } from '../../api/binance';
 
@@ -49,6 +50,10 @@ export interface PnlPoint {
   timestamp: number;
   pnl: number;
 }
+
+/** Pricing source for an option leg. Real Bybit library data is canonical;
+ *  'deribit' (marks) and 'bybit-bs' (Black-Scholes reconstruction) are optional. */
+export type DataSource = 'deribit' | 'bybit' | 'bybit-bs';
 
 export interface BacktestResult {
   position: BacktestPosition;
@@ -76,6 +81,83 @@ function nearestByTime<T extends { t: number }>(sorted: T[], targetSec: number):
   const a = sorted[lo];
   const b = lo > 0 ? sorted[lo - 1] : a;
   return Math.abs(a.t - targetSec) <= Math.abs(b.t - targetSec) ? a : b;
+}
+
+/**
+ * Build a time-varying, skew-aware IV function from a Deribit volatility smile.
+ *
+ * Fetches the listed strikes nearest the target for the expiry, inverts each
+ * strike's hourly mark to an implied vol, and groups the results into an hourly
+ * smile of (moneyness = ln(spot/strike), iv) points. The returned function
+ * interpolates across that smile at the target strike's moneyness — capturing
+ * the volatility skew that a flat ATM estimate (DVOL) ignores. For OTM strikes
+ * DVOL underprices by 50-99%; interpolating the real smile fixes that.
+ *
+ * Returns null if no smile could be built (no listed strikes / no mark history).
+ */
+async function buildDeribitSmileIv(
+  currency: 'BTC' | 'ETH',
+  expiryLabel: string,
+  optType: 'Call' | 'Put',
+  targetStrike: number,
+  expiryMs: number,
+  startMs: number,
+  endMs: number,
+  btcSpot: { t: number; p: number }[],
+  maxStrikes = 7,
+): Promise<((tSec: number, spot: number) => number | null) | null> {
+  const YEAR_SEC = 365.25 * 24 * 3600;
+  if (btcSpot.length === 0) return null;
+
+  let strikes: number[];
+  try {
+    strikes = await fetchDeribitStrikes(currency, expiryLabel, true);
+  } catch { return null; }
+  if (strikes.length === 0) return null;
+
+  // The maxStrikes listed strikes closest to the target bracket its moneyness.
+  const chosen = [...strikes]
+    .sort((a, b) => Math.abs(a - targetStrike) - Math.abs(b - targetStrike))
+    .slice(0, maxStrikes);
+  const typeChar = optType === 'Call' ? 'C' : 'P';
+
+  // hour bucket → smile points for that hour
+  const buckets = new Map<number, SmilePoint[]>();
+  for (const k of chosen) {
+    let candles: { timestamp: number; close: number }[] = [];
+    try {
+      candles = await fetchDeribitCandles(`${currency}-${expiryLabel}-${k}-${typeChar}`, startMs, endMs, 60);
+    } catch { continue; } // strike with no mark history — skip
+    for (const c of candles) {
+      const cTs = Math.floor(c.timestamp / 1000);
+      const spot = nearestByTime(btcSpot, cTs);
+      if (!spot) continue;
+      const tau = Math.max((expiryMs / 1000 - cTs) / YEAR_SEC, 0);
+      if (tau < 1 / (365.25 * 24)) continue; // near expiry: vega ≈ 0, IV unstable
+      const iv = bsImpliedVol(spot.p, k, tau, c.close * spot.p, optType);
+      if (iv == null) continue;
+      const arr = buckets.get(Math.floor(cTs / 3600) * 3600) ?? [];
+      arr.push({ moneyness: Math.log(spot.p / k), iv });
+      buckets.set(Math.floor(cTs / 3600) * 3600, arr);
+    }
+  }
+  if (buckets.size === 0) return null;
+
+  // interpolateSmile requires moneyness-ascending points.
+  for (const pts of buckets.values()) pts.sort((a, b) => a.moneyness - b.moneyness);
+  const hours = [...buckets.keys()].sort((a, b) => a - b);
+
+  return (tSec: number, spot: number): number | null => {
+    const hr = Math.floor(tSec / 3600) * 3600;
+    let smile = buckets.get(hr);
+    if (!smile) {
+      let best = hours[0];
+      for (const h of hours) if (Math.abs(h - hr) < Math.abs(best - hr)) best = h;
+      smile = buckets.get(best);
+    }
+    if (!smile || smile.length === 0) return null;
+    return interpolateSmile(smile, Math.log(spot / targetStrike));
+  };
 }
 
 function formatDate(ts: number) {
@@ -216,6 +298,11 @@ export function BacktesterTab() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  // Optional reconstruction sources for option legs. Real Bybit library data is
+  // always computed (library-first); Deribit marks and the BS reconstruction are
+  // only computed when the user enables them via the chart chips (lazy — avoids
+  // Deribit rate-limit calls on every run).
+  const [optionalSources, setOptionalSources] = useState<Set<DataSource>>(new Set());
 
   // Crypto overlay
   const [cryptoOverlay, setCryptoOverlay] = useState<CryptoOption | null>(null);
@@ -486,8 +573,12 @@ export function BacktesterTab() {
 
   // ---- Run backtest ----
 
-  const handleRunBacktest = useCallback(async () => {
+  const handleRunBacktest = useCallback(async (optionalOverride?: Set<DataSource>) => {
     if (positions.length === 0) return;
+    // Which reconstruction sources to compute this run (besides the always-on
+    // real Bybit library). Override lets a chip toggle run immediately with the
+    // new set before React state has flushed.
+    const activeOptional = optionalOverride ?? optionalSources;
     const nowSec = Math.floor(Date.now() / 1000);
     const todayStr = formatDate(nowSec);
     // Auto-bump a stale default endDate to today (handles tabs left open overnight).
@@ -524,9 +615,11 @@ export function BacktesterTab() {
       // Pre-fetch DVOL once per run before option candle fetches to avoid hitting
       // Deribit rate limits mid-run (candle fetches come after and may get 429'd,
       // but DVOL fetched first on a fresh rate-limit window usually succeeds).
-      const hasOptions = positions.some(p => p.kind === 'deribit');
-      const hasBtcOpts = positions.some(p => p.kind === 'deribit' && !p.instrumentName?.startsWith('ETH'));
-      const hasEthOpts = positions.some(p => p.kind === 'deribit' && p.instrumentName?.startsWith('ETH'));
+      // Only needed for the BS reconstruction's last-resort fallback, so skip it
+      // entirely unless the user has enabled 'bybit-bs' (keeps default runs Deribit-free).
+      const hasOptions = activeOptional.has('bybit-bs') && positions.some(p => p.kind === 'deribit');
+      const hasBtcOpts = hasOptions && positions.some(p => p.kind === 'deribit' && !p.instrumentName?.startsWith('ETH'));
+      const hasEthOpts = hasOptions && positions.some(p => p.kind === 'deribit' && p.instrumentName?.startsWith('ETH'));
       const prefetchedDvol = new Map<'BTC' | 'ETH', Map<number, number>>();
       if (hasOptions) {
         const [btcDvol, ethDvol] = await Promise.all([
@@ -562,7 +655,8 @@ export function BacktesterTab() {
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');
-          const sources = ['deribit', 'bybit-bs'] as const;
+          // Only the optional sources the user has enabled (real Bybit handled below).
+          const sources = (['deribit', 'bybit-bs'] as const).filter(s => activeOptional.has(s));
           const sourceLabels: Record<string, string> = { deribit: 'Deribit', bybit: 'Bybit', 'bybit-bs': 'BS' };
           const qty = pos.quantity ?? 0.01;
           // Caches Deribit raw candles (BTC-denominated) so Bybit BS can reuse them
@@ -817,12 +911,36 @@ export function BacktesterTab() {
                 }
               }
 
-              // ── Fallback: DVOL-scaled Bybit IV > raw DVOL ────────────────────
-              // When Deribit candles are unavailable, scale the live Bybit IV (strike-specific)
-              // by the DVOL ratio to get a time-varying, strike-aware IV estimate.
-              // e.g. if today's DVOL=55% and liveBybitIV=62%, and yesterday's DVOL=58%,
-              // then yesterday's estimate = 62% × (58% / 55%) = 65.4% — captures vol regime.
               const currency = baseName.startsWith('ETH') ? 'ETH' : 'BTC';
+
+              // ── Option B: skew-aware Deribit smile ────────────────────────────
+              // The exact strike's Deribit IV wasn't available (e.g. the strike is
+              // not on Deribit's grid). Build a smile from the neighbouring listed
+              // strikes and interpolate at our strike's moneyness — this captures
+              // the skew that flat ATM DVOL misses (DVOL underprices OTM by 50-99%).
+              const expiryLabel = baseName.match(/^(?:BTC|ETH)-(\d{1,2}[A-Z]{3}\d{2})-/)?.[1];
+              if (expiryLabel) {
+                const btcSpot = spotHistories.get('BTC') ?? [];
+                const smileIv = await buildDeribitSmileIv(
+                  currency, expiryLabel, effectivePos.optType!, effectivePos.optStrike!,
+                  effectivePos.optExpiryMs!, startTs * 1000, endTs * 1000, btcSpot,
+                );
+                const firstIvS = smileIv?.(filtered[0].t, firstSpot) ?? null;
+                if (smileIv && firstIvS != null) {
+                  const entryPriceS = bsPrice(firstSpot, effectivePos.optStrike!, firstIvS, firstTau, effectivePos.optType!);
+                  localWarnings.push(`BS: ${baseName} — Deribit smile IV (skew-aware). Entry IV: ${(firstIvS * 100).toFixed(1)}%.`);
+                  newResults.push({ position: syntheticPos, entryValue: entryPriceS * Math.abs(qty), source, pnlSeries: filtered.map(pt => {
+                    const tau = Math.max((effectivePos.optExpiryMs! / 1000 - pt.t) / YEAR_SEC, 0);
+                    const iv = smileIv(pt.t, pt.p) ?? firstIvS;
+                    return { timestamp: pt.t, pnl: (bsPrice(pt.p, effectivePos.optStrike!, iv, tau, effectivePos.optType!) - entryPriceS) * qty };
+                  }) });
+                  continue;
+                }
+              }
+
+              // ── Fallback: raw DVOL (ATM) as a last resort ─────────────────────
+              // No strike-specific IV available at all — ATM vol ignores skew, so
+              // this is only a coarse approximation (kept so the line isn't blank).
               const dvolMap = prefetchedDvol.get(currency) ?? new Map<number, number>();
               const hasDvol = dvolMap.size > 0;
 
@@ -879,7 +997,23 @@ export function BacktesterTab() {
     } finally {
       setRunning(false);
     }
-  }, [positions, startDate, endDate, endDateUserSet]);
+  }, [positions, startDate, endDate, endDateUserSet, optionalSources]);
+
+  // Toggle an optional source (Deribit / BS) from the chart chips. Turning one
+  // on for the first time triggers a recompute that includes it (lazy); turning
+  // it off just hides the already-computed series (filtered in the chart).
+  const handleToggleSource = useCallback((src: DataSource) => {
+    setOptionalSources(prev => {
+      const next = new Set(prev);
+      const turningOn = !next.has(src);
+      if (turningOn) next.add(src); else next.delete(src);
+      // Compute it now if we don't already have a series for this source.
+      if (turningOn && !results.some(r => r.source === src)) {
+        void handleRunBacktest(next);
+      }
+      return next;
+    });
+  }, [results, handleRunBacktest]);
 
   const timeRange = useMemo(() => {
     const nowSec = Math.floor(Date.now() / 1000);
@@ -908,7 +1042,7 @@ export function BacktesterTab() {
       {/* Top toolbar: Refresh / Load / Save */}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
         <input ref={uploadRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleUpload} />
-        <Button size="small" variant="outlined" startIcon={running ? <CircularProgress size={14} /> : <Refresh />} onClick={handleRunBacktest} disabled={positions.length === 0 || running}>
+        <Button size="small" variant="outlined" startIcon={running ? <CircularProgress size={14} /> : <Refresh />} onClick={() => handleRunBacktest()} disabled={positions.length === 0 || running}>
           Refresh
         </Button>
         <Button size="small" variant="outlined" startIcon={<Upload />} onClick={() => uploadRef.current?.click()}>
@@ -925,6 +1059,9 @@ export function BacktesterTab() {
           <div ref={chartRef}>
             <BacktestChart
               results={results}
+              optionalSources={optionalSources}
+              onToggleSource={handleToggleSource}
+              sourcesRunning={running}
               startTimestamp={timeRange.startTs}
               endTimestamp={timeRange.endTs}
               cryptoOverlay={cryptoOverlay}
@@ -1041,7 +1178,7 @@ export function BacktesterTab() {
         />
         <Button
           variant="contained"
-          onClick={handleRunBacktest}
+          onClick={() => handleRunBacktest()}
           disabled={positions.length === 0 || running}
           startIcon={running ? <CircularProgress size={16} /> : undefined}
         >

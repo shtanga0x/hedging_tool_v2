@@ -129,6 +129,12 @@ function findNearestClose(candles: OHLCCandle[], target: number): number | null 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface BacktestChartProps {
   results: BacktestResult[];
+  /** Optional sources (Deribit/BS) the user has enabled; real Bybit is always on. */
+  optionalSources?: Set<DataSource>;
+  /** Toggle an optional source on/off (lazily computes it on first enable). */
+  onToggleSource?: (src: DataSource) => void;
+  /** True while a (re)compute is in flight — shows a spinner on the active chip. */
+  sourcesRunning?: boolean;
   startTimestamp: number;
   endTimestamp: number;
   cryptoOverlay: CryptoOption | null;
@@ -244,6 +250,9 @@ function CandlestickLayer({ candles, xDomain, yDomain }: CandlestickLayerProps) 
 // ─── Main chart component ─────────────────────────────────────────────────────
 export function BacktestChart({
   results,
+  optionalSources,
+  onToggleSource,
+  sourcesRunning,
   startTimestamp,
   endTimestamp,
   cryptoOverlay,
@@ -280,26 +289,42 @@ export function BacktestChart({
   const tooltipBg      = isDark ? '#131A2A' : '#FFFFFF';
   const tooltipBorder  = isDark ? 'rgba(139,157,195,0.3)' : 'rgba(0,0,0,0.12)';
 
-  // Available sources in current results (for filter chips)
-  const availableSources = useMemo((): DataSource[] => {
-    const srcs = new Set<string>();
-    for (const r of results) { if (r.source) srcs.add(r.source); }
-    return (['deribit', 'bybit', 'bybit-bs'] as DataSource[]).filter(s => srcs.has(s));
-  }, [results]);
+  const isOptionalSource = (s: string): s is DataSource => s === 'deribit' || s === 'bybit-bs';
+  const hasOptionLegs = useMemo(() => results.some(r => r.position.kind === 'deribit'), [results]);
 
-  // Results filtered by source toggle
+  // Chips to render: real Bybit when present, plus the optional Deribit/BS chips
+  // whenever there are option legs (so they can be enabled even before they run).
+  const chipSources = useMemo((): DataSource[] => {
+    const present = new Set<string>();
+    for (const r of results) { if (r.source) present.add(r.source); }
+    return (['bybit', 'deribit', 'bybit-bs'] as DataSource[])
+      .filter(s => present.has(s) || (hasOptionLegs && isOptionalSource(s)));
+  }, [results, hasOptionLegs]);
+
+  // Whether an optional source is currently enabled (parent-owned, lazy compute).
+  const isSourceActive = useCallback((src: DataSource) =>
+    isOptionalSource(src) ? (optionalSources?.has(src) ?? false) : !hiddenSources.has(src),
+  [optionalSources, hiddenSources]);
+
+  // Results filtered by source visibility. Optional sources show only when
+  // enabled; Bybit shows unless locally hidden; non-option rows always show.
   const visibleResults = useMemo(
-    () => results.filter(r => !r.source || !hiddenSources.has(r.source)),
-    [results, hiddenSources],
+    () => results.filter(r => {
+      if (!r.source) return true;
+      if (isOptionalSource(r.source)) return optionalSources?.has(r.source) ?? false;
+      return !hiddenSources.has(r.source);
+    }),
+    [results, hiddenSources, optionalSources],
   );
 
   const toggleSourceFilter = useCallback((src: DataSource) => {
+    if (isOptionalSource(src)) { onToggleSource?.(src); return; }
     setHiddenSources(prev => {
       const next = new Set(prev);
       next.has(src) ? next.delete(src) : next.add(src);
       return next;
     });
-  }, []);
+  }, [onToggleSource]);
 
   const hasPolymarket = visibleResults.some(r => r.position.kind === 'polymarket');
   const hasOptions    = visibleResults.some(r => r.position.kind === 'deribit' || r.position.kind === 'futures');
@@ -617,17 +642,20 @@ export function BacktestChart({
         <Typography sx={{ marginRight: 'auto', pl: '28px', fontSize: 13, fontWeight: 500, color: legendColor }}>
           PnL
         </Typography>
-        {availableSources.map(src => {
-          const hidden = hiddenSources.has(src);
+        {chipSources.map(src => {
+          const active = isSourceActive(src);
+          const optional = isOptionalSource(src);
+          const loading = !!sourcesRunning && optional && active;
           return (
             <Chip
               key={src}
-              label={SOURCE_LABELS[src]}
+              label={loading ? `${SOURCE_LABELS[src]}…` : SOURCE_LABELS[src]}
               size="small"
               clickable
-              variant={hidden ? 'outlined' : 'filled'}
+              variant={active ? 'filled' : 'outlined'}
               onClick={() => toggleSourceFilter(src)}
-              sx={!hidden ? { bgcolor: SOURCE_COLORS[src], color: '#fff', fontSize: 11 } : { fontSize: 11 }}
+              title={optional && !active ? `Run ${SOURCE_LABELS[src]} reconstruction` : undefined}
+              sx={active ? { bgcolor: SOURCE_COLORS[src], color: '#fff', fontSize: 11 } : { fontSize: 11 }}
             />
           );
         })}
