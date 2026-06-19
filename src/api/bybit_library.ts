@@ -51,12 +51,21 @@ export async function fetchBybitLibraryMidprice(
   if (resample) params.set('resample',  resample);
 
   let res: Response;
+  // Hard timeout so a slow/hung server fails fast instead of stalling the whole
+  // backtest run (the caller surfaces the error as a warning).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
   try {
-    res = await fetch(`${BASE}/api/midprice?${params}`);
-  } catch {
+    res = await fetch(`${BASE}/api/midprice?${params}`, { signal: ctrl.signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Bybit library request timed out after 30s.');
+    }
     throw new Error(
       'Bybit library server not reachable. Start it with: python btc-options-lib/api_server.py'
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) {

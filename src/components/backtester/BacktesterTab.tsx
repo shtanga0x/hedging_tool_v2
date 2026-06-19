@@ -562,33 +562,66 @@ export function BacktesterTab() {
 
         } else if (pos.kind === 'deribit' && pos.instrumentName) {
           const baseName = pos.instrumentName.replace(/-USDT$/, '');
-          const sources = ['deribit', 'bybit', 'bybit-bs'] as const;
+          const sources = ['deribit', 'bybit-bs'] as const;
           const sourceLabels: Record<string, string> = { deribit: 'Deribit', bybit: 'Bybit', 'bybit-bs': 'BS' };
           const qty = pos.quantity ?? 0.01;
           // Caches Deribit raw candles (BTC-denominated) so Bybit BS can reuse them
           // without a second API call — populated in the 'deribit' source block below.
           let cachedDeribitCandles: { timestamp: number; close: number }[] = [];
 
-          // Start library fetch immediately so it runs in parallel with Deribit processing
+          // Derived option fields (parse from the name if the card pre-dates auto-population).
+          const parsedFields = (pos.optStrike == null || pos.optExpiryMs == null || !pos.optType)
+            ? parseInstrumentFields(baseName)
+            : null;
+          const effectivePos = parsedFields ? { ...pos, ...parsedFields } : pos;
+
+          // ── Library-first ────────────────────────────────────────────────────
+          // Our own daily-collected Bybit midprice library holds real traded
+          // prices, so it is the authoritative source. When it has data for this
+          // instrument/range we use it and skip the Deribit + Black-Scholes
+          // reconstructions entirely (no rate-limit noise, no IV guesswork).
+          // We only fall back to those when the library has nothing — and we say so.
           const libParams = parseToLibraryParams(baseName);
-          // Always pass the computed date range (not raw strings) so we never
-          // fetch data outside the backtest window or pull all history when startDate is empty.
-          const libDateFrom = new Date(startTs * 1000).toISOString().slice(0, 10);
-          const libDateTo   = new Date(endTs   * 1000).toISOString().slice(0, 10);
-          const libraryPromise: Promise<LibraryCandle[]> = libParams
-            ? fetchBybitLibraryMidprice(
+          if (libParams) {
+            // Pass the computed date range so we never pull all history.
+            const libDateFrom = new Date(startTs * 1000).toISOString().slice(0, 10);
+            const libDateTo   = new Date(endTs   * 1000).toISOString().slice(0, 10);
+            let libCandles: LibraryCandle[] = [];
+            let libError: string | null = null;
+            try {
+              libCandles = await fetchBybitLibraryMidprice(
                 libParams.expiry, libParams.strike, libParams.optType,
                 libDateFrom, libDateTo, resample,
-              ).catch(() => [])
-            : Promise.resolve([]);
+              );
+            } catch (e) {
+              libError = e instanceof Error ? e.message : String(e);
+            }
+
+            if (libCandles.length > 0) {
+              const entryPrice = libCandles[0].close;
+              newResults.push({
+                position: { ...effectivePos, id: `${pos.id}_bybit`, label: `${baseName} (Bybit)` },
+                pnlSeries: libCandles.map(c => ({
+                  timestamp: Math.floor(c.timestamp / 1000),
+                  pnl: (c.close - entryPrice) * qty,
+                })),
+                entryPrice,
+                entryValue: entryPrice * Math.abs(qty),
+                source: 'bybit',
+              });
+              continue; // real data found — skip Deribit/BS reconstructions for this leg
+            }
+
+            // No library data — surface why before falling back (was silent before).
+            localWarnings.push(
+              libError
+                ? `Bybit library: ${baseName} — ${libError} Falling back to Deribit/BS.`
+                : `Bybit library: ${baseName} — no collected data in ${libDateFrom}…${libDateTo}. Falling back to Deribit/BS.`,
+            );
+          }
 
           for (const source of sources) {
             const resultId = `${pos.id}_${source}`;
-            // If derived fields are missing (card pre-dates auto-population), parse from instrument name
-            const parsedFields = (pos.optStrike == null || pos.optExpiryMs == null || !pos.optType)
-              ? parseInstrumentFields(baseName)
-              : null;
-            const effectivePos = parsedFields ? { ...pos, ...parsedFields } : pos;
             const syntheticPos = { ...effectivePos, id: resultId, label: `${baseName} (${sourceLabels[source]})` };
 
             if (source === 'deribit') {
@@ -720,24 +753,6 @@ export function BacktesterTab() {
                 localWarnings.push(`Deribit: no mark-price or trade history for ${resolvedName} in this date range (typical for illiquid/short-dated options). BS reconstruction (purple dashed line) is shown instead.`);
                 newResults.push({ position: syntheticPos, pnlSeries: [], entryValue: 0, source });
               }
-
-            } else if (source === 'bybit') {
-              // Real Bybit midprice history from local btc-options-lib Parquet library.
-              // Prices are already in USDT — no BTC/USD conversion needed.
-              const libCandles = await libraryPromise;
-              if (libCandles.length === 0) continue;
-
-              const entryPrice = libCandles[0].close;
-              newResults.push({
-                position: syntheticPos,
-                pnlSeries: libCandles.map(c => ({
-                  timestamp: Math.floor(c.timestamp / 1000),
-                  pnl: (c.close - entryPrice) * qty,
-                })),
-                entryPrice,
-                entryValue: entryPrice * Math.abs(qty),
-                source: 'bybit',
-              });
 
             } else if (source === 'bybit-bs') {
               // Bybit BS: BS reconstruction with strike-specific time-varying IV.
