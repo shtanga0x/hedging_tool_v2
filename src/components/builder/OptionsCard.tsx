@@ -502,7 +502,7 @@ export function OptionsCard({
                     const hasCallSelection = anyCallSelectedAtStrike(row.strike);
                     const hasPutSelection = anyPutSelectedAtStrike(row.strike);
                     const sizeFieldSx = { width: 66 };
-                    const sizeInputProps = { step: 'any', style: { fontSize: 12, padding: '3px 4px' } };
+                    const sizeInputProps = { step: 0.01, style: { fontSize: 12, padding: '3px 4px' } };
                     return (
                       <TableRow key={row.strike} sx={{ bgcolor: isNearSpot ? 'action.selected' : undefined }}>
                         {renderSide(row.call, true, effectiveSpot)}
